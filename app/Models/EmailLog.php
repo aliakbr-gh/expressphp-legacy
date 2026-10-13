@@ -21,6 +21,7 @@ final class EmailLog extends Model
         'error_message',
         'sent_at',
     ];
+    protected array $dates = ['sent_at', 'created_at', 'updated_at'];
 
     public function latest(int $limit, int $offset = 0, ?string $date = null): array
     {
@@ -35,7 +36,7 @@ final class EmailLog extends Model
         $statement->bindValue('limit', max(1, $limit), \PDO::PARAM_INT);
         $statement->bindValue('offset', max(0, $offset), \PDO::PARAM_INT);
         $statement->execute();
-        return $statement->fetchAll();
+        return $this->presentAll($statement->fetchAll());
     }
 
     public function countForDate(?string $date = null): int

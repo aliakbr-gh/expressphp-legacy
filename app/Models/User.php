@@ -19,6 +19,7 @@ final class User extends Model
         'session_version',
         'role_id',
     ];
+    protected array $hidden = ['password'];
 
     public function allDetailed(): array
     {
@@ -55,7 +56,7 @@ final class User extends Model
 
     public function authenticate(string $username, string $password): ?array
     {
-        $user = $this->findByUsername($username);
+        $user = $this->rawFirstWhere('username', $username);
         $hash = $user['password'] ?? null;
 
         if (
@@ -91,7 +92,7 @@ final class User extends Model
             $statement->bindValue('offset', max(0, $offset), \PDO::PARAM_INT);
         }
         $statement->execute();
-        return $statement->fetchAll();
+        return $this->presentAll($statement->fetchAll());
     }
 
     public function permissionsCount(int|string $userId): int
@@ -129,7 +130,7 @@ final class User extends Model
 
     private function withPermissions(array $user): array
     {
-        unset($user['password']);
+        $user = $this->present($user);
         $user['is_active'] = (bool)$user['is_active'];
         $user['permissions'] = $this->permissions($user['id']);
         return $user;

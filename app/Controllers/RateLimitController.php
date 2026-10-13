@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Controllers;
 
 use App\Models\ActivityLog;
+use ExpressPHP\Core\Config;
 use ExpressPHP\Http\Pagination;
 use ExpressPHP\Http\Request;
 use ExpressPHP\Http\Response;
@@ -15,12 +16,10 @@ final class RateLimitController
     private readonly RateLimiter $limiter;
 
     public function __construct(
-        ?RateLimiter $limiter = null,
+        Config                       $config,
         private readonly ActivityLog $activities = new ActivityLog(),
     ) {
-        $this->limiter = $limiter ?? new RateLimiter(
-            (require dirname(__DIR__, 2) . '/config/app.php')['rate_limiter'] ?? [],
-        );
+        $this->limiter = new RateLimiter($config->get('rate_limiter', []));
     }
 
     public function blocked(Request $request, Response $response): Response

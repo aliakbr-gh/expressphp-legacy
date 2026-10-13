@@ -114,6 +114,7 @@ These files are PHP programs run from the terminal. `cli/make` and `cli/rate-lim
 | `cli/make` | Starts the file generator. Creates a controller, model, middleware class, or timestamped migration from a template. Example: `php cli/make controller Product`. |
 | `cli/migrate.php` | Starts the migration runner. Shows migration status, applies pending migrations, or reverses the latest batch. Accepts an optional connection name after the command. |
 | `cli/rate-limit` | Manages the same IP limiter records used by the API. Supports `status`, `block`, `clear`, and `blocked`. Example: `php cli/rate-limit status 192.0.2.10`. |
+| `cli/check-deploy` | Requests private paths such as `/.git/HEAD`, `/config/app.php`, and `/storage/logs/` from a deployed site and fails if any is reachable. Example: `php cli/check-deploy https://api.example.com`. |
 
 ## Application database migration
 
@@ -131,6 +132,8 @@ Keep application migrations at the project root. The reusable code that runs the
 |---|---|
 | `src/bootstrap.php` | Registers the class loader for `App\` and `ExpressPHP\`, records when execution started, and loads the helper functions. This lets PHP find class files without Composer. |
 | `src/helpers.php` | Defines `dd()`, the shortcut for displaying debug values and stopping execution. It sends those values to `Debugger`. |
+| `src/Core/Config.php` | Read-only access to the configuration by dot path. The router passes it to controller and middleware constructor parameters typed `Config`. |
+| `src/Core/ErrorHandler.php` | Turns off PHP error display, converts warnings into exceptions, and records fatal errors in the private error log. |
 | `src/Core/Application.php` | Connects the configured framework tools and provides route registration methods. Handles requests through CORS, rate limiting, and routing; adds security headers; turns failures into responses; and writes request logs after sending the response. |
 | `src/Core/Debugger.php` | Builds the developer dump page with values, request information, and runtime details. Redacts known sensitive fields and shows detailed output only when debug dumps are enabled. |
 | `src/Core/MakeCommand.php` | Contains the templates and writing logic behind `cli/make`. Builds filenames and namespaces and refuses to overwrite an existing file. |
@@ -152,13 +155,13 @@ PDO is PHP's database connection tool. Application models use it through these s
 
 | File | What it contains and does |
 |---|---|
-| `src/Database/Database.php` | Keeps connection settings, opens a named PDO connection when needed, and reuses it. Supports MySQL and SQLite connection strings; the starter's migration and backup tools use MySQL. |
-| `src/Database/Model.php` | Provides shared methods for reading, creating, editing, deleting, counting, and paginating rows. Child models choose a table, an optional connection, and the fields that may be saved. |
+| `src/Database/Database.php` | Keeps connection settings, opens a named PDO connection when needed, and reuses it. Sets a connection timeout and a UTC MySQL session, and provides `transaction()`. Supports MySQL and SQLite connection strings; the starter's migration and backup tools use MySQL. |
+| `src/Database/Model.php` | Provides shared methods for reading, creating, editing, deleting, counting, and paginating rows. Binds values by type, removes `$hidden` columns from results, and returns `$dates` columns as ISO 8601 UTC. Child models choose a table, an optional connection, and the fields that may be saved. |
 | `src/Database/DatabaseBackup.php` | Writes MySQL table definitions and rows to an SQL file, then puts that file in a ZIP archive. Uses generated filenames in the private backup directory. |
 | `src/Database/Migrations/Migration.php` | Defines the two methods every migration provides: `up()` applies a change, and `down()` reverses it. |
-| `src/Database/Migrations/Migrator.php` | Finds migration files, runs pending ones in filename order, and records completed migrations in the database. Shows their status and can reverse the latest batch. |
+| `src/Database/Migrations/Migrator.php` | Finds migration files, runs pending ones in filename order under a database lock, and records completed migrations. Shows their status without writing, and lists or reverses the latest batch; the CLI requires `--force` to roll back in production. |
 
-The migration runner creates its tracking table when it starts, including when checking status. The second database example can be selected with `ExpressPHP\Database\Database::connection('reporting')` after enabling its settings.
+The migration runner creates its tracking table when it first migrates or rolls back; `status` only reads. The second database example can be selected with `ExpressPHP\Database\Database::connection('reporting')` after enabling its settings.
 
 ## Framework HTTP tools
 
@@ -167,6 +170,7 @@ The migration runner creates its tracking table when it starts, including when c
 | `src/Http/Request.php` | Wraps incoming JSON, form fields, query values, headers, cookies, uploaded files, and route parameters. Provides validation helpers, trusted-proxy handling, and a place to store the authenticated user. |
 | `src/Http/Response.php` | Builds and sends responses with status codes and headers. Supports success/error JSON, text, HTML, PHP views with data, cookies, redirects, streams, and downloads. |
 | `src/Http/CORS.php` | Adds browser cross-origin response headers when the requesting origin is allowed. Uses the configured methods, headers, and credential policy. |
+| `src/Http/IpAddress.php` | Normalizes IPv4 and IPv6 addresses and matches them against IPs or CIDR ranges for trusted proxies. |
 | `src/Http/Pagination.php` | Wraps a result list with its total, limit, offset, returned count, and information about the next page. |
 | `src/Http/HttpException.php` | Carries an error message and HTTP status code so the application can return the appropriate response. |
 
@@ -201,7 +205,10 @@ The migration runner creates its tracking table when it starts, including when c
 
 | File | What it contains and does |
 |---|---|
-| `src/Logging/RequestLogger.php` | Writes request details to a daily log, including response status, duration, IP address, and user information. Redacts known sensitive fields, limits logged input, and lets the API continue if logging fails. |
+| `src/Logging/RequestLogger.php` | Writes request details to a daily log, including response status, duration, IP address, and user information. Redacts sensitive fields, never logs the raw URL, limits logged input, and returns log pages newest first. |
+| `src/Logging/ErrorLogger.php` | Records unexpected exceptions with their request ID in `storage/logs/errors-Y-m-d.log`. |
+| `src/Logging/Redactor.php` | Decides which keys are sensitive and replaces their values; shared by the request log and the debugger. |
+| `src/Logging/LogFiles.php` | Reads log files backwards in fixed-size chunks, counts lines without loading the file, and deletes dated logs past the retention period. |
 | `src/Mail/SMTPMailer.php` | Sends HTML or plain-text email directly through a configured SMTP server. Handles server replies, authentication, encryption, and message formatting without an external package. |
 | `src/Mail/MailException.php` | Defines the error type for email configuration and delivery failures. |
 | `src/Storage/FileUploader.php` | Checks uploaded files, size, extension, and detected content type before saving them under generated filenames. Supports multiple uploads and limits deletion to files inside the upload directory. |
@@ -218,9 +225,10 @@ These files contain runtime data rather than application instructions. Apache bl
 | `storage/backups/.gitignore` | Keeps generated backup files out of Git while keeping the backup folder's placeholder file. |
 | `storage/uploads/.gitignore` | Keeps uploaded files out of Git while keeping the upload folder's placeholder file. |
 | `storage/logs/YYYY-MM-DD.log` | Daily request log entries written by `RequestLogger` and read by `ServerLog`. These are different from user activity records stored in the database. |
+| `storage/logs/errors-YYYY-MM-DD.log` | Unexpected exceptions and fatal errors written by `ErrorLogger`, with the request ID returned to the client. |
 | `storage/rate-limiter/*.json` | Per-IP request counts, violation counts, pauses, and blocks used by `RateLimiter`. |
 | `storage/uploads/*` | Uploaded files stored under generated names after validation. The saved file type depends on the allowed upload policy. |
-| `storage/backups/*.sql` | Temporary database exports created while preparing a download. |
+| `storage/backups/*.sql` | Temporary database exports, deleted as soon as the ZIP is written. |
 | `storage/backups/*.zip` | Temporary download archives containing those SQL exports. The backup controller removes temporary files after sending them. |
 
 ## How a request moves through the files

@@ -33,7 +33,7 @@ final class Permission extends Model
             $statement->bindValue('offset', max(0, $offset), \PDO::PARAM_INT);
         }
         $statement->execute();
-        return $statement->fetchAll();
+        return $this->presentAll($statement->fetchAll());
     }
 
     public function rolesCount(int|string $id): int

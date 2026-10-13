@@ -9,6 +9,7 @@ use JsonException;
 final class JWT
 {
     private const ALGORITHM = 'HS256';
+    private const MAX_HEADER_BYTES = 512;
     private static array $config = [];
 
     public static function configure(array $config): void
@@ -35,7 +36,7 @@ final class JWT
             'exp' => $now + $ttl,
             'jti' => bin2hex(random_bytes(16)),
         ];
-        $header = ['typ' => 'JWT', 'alg' => self::ALGORITHM];
+        $header = ['typ' => 'JWT', 'alg' => self::ALGORITHM, 'kid' => self::keyId()];
 
         try {
             $encodedHeader = self::base64URLEncode(json_encode($header, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES));
@@ -49,27 +50,29 @@ final class JWT
         return $signingInput . '.' . self::base64URLEncode($signature);
     }
 
+    /**
+     * Only tokens issued by this application are supported: HS256, typ JWT, and a known key id.
+     * The payload is parsed only after the signature has been verified.
+     */
     public static function decode(string $token): array
     {
         $segments = explode('.', trim($token));
-        if (count($segments) !== 3 || in_array('', $segments, true)) {
+        if (count($segments) !== 3 || in_array('', $segments, true) || strlen($segments[0]) > self::MAX_HEADER_BYTES) {
             throw new JWTException('Malformed JWT.');
         }
 
         [$encodedHeader, $encodedPayload, $encodedSignature] = $segments;
         $header = self::decodeJSON($encodedHeader, 'header');
-        $payload = self::decodeJSON($encodedPayload, 'payload');
-        $signature = self::base64URLDecode($encodedSignature);
-
         if (($header['typ'] ?? null) !== 'JWT' || ($header['alg'] ?? null) !== self::ALGORITHM) {
             throw new JWTException('Unsupported JWT header.');
         }
 
-        $expected = hash_hmac('sha256', $encodedHeader . '.' . $encodedPayload, self::secret(), true);
-        if (!hash_equals($expected, $signature)) {
+        $expected = hash_hmac('sha256', $encodedHeader . '.' . $encodedPayload, self::secretFor($header['kid'] ?? null), true);
+        if (!hash_equals($expected, self::base64URLDecode($encodedSignature))) {
             throw new JWTException('Invalid JWT signature.');
         }
 
+        $payload = self::decodeJSON($encodedPayload, 'payload');
         self::validateClaims($payload);
         return $payload;
     }
@@ -149,7 +152,33 @@ final class JWT
 
     private static function secret(): string
     {
-        $secret = (string)(self::$config['secret'] ?? '');
+        return self::checkedSecret((string)(self::$config['secret'] ?? ''));
+    }
+
+    private static function keyId(): string
+    {
+        return (string)(self::$config['kid'] ?? 'primary');
+    }
+
+    /**
+     * Resolves the signing secret for a token's key id. Tokens without a kid predate key ids
+     * and use the current secret; retired secrets stay valid while listed in previous_keys.
+     */
+    private static function secretFor(mixed $keyId): string
+    {
+        if ($keyId === null || $keyId === self::keyId()) {
+            return self::secret();
+        }
+
+        $previous = self::$config['previous_keys'] ?? [];
+        if (!is_string($keyId) || !is_array($previous) || !isset($previous[$keyId])) {
+            throw new JWTException('Unknown JWT key.');
+        }
+        return self::checkedSecret((string)$previous[$keyId]);
+    }
+
+    private static function checkedSecret(string $secret): string
+    {
         if (strlen($secret) < 32) {
             throw new JWTException('JWT secret must contain at least 32 bytes.');
         }

@@ -12,9 +12,10 @@ RewriteCond %{HTTP:Authorization} ^(.+)$
 RewriteRule ^ - [E=HTTP_AUTHORIZATION:%1]
 
 # Source, storage, CLI, and metadata must never be fetched as files.
-# Works when the project folder is the subdomain document root
-# (for example public_html for digi.example.com).
-RewriteRule ^(?:\.git|public|cli|AGENTS\.md|LICENSE|README\.md|PROJECT\.md|app|config|migrations|routes|src|storage)(?:/|$) - [F,L,NC]
+# Prefer public/ as the document root; these rules protect the project root only when Apache honors .htaccess.
+# Verify every deployment with: php cli/check-deploy https://your-domain
+RewriteRule ^(?:\.git|public|cli|LICENSE|app|config|migrations|routes|src|storage)(?:/|$) - [F,L,NC]
+RewriteRule \.md$ - [F,L,NC]
 
 # Every other URL, including /api/v1/..., enters the front controller.
 RewriteRule ^index\.php$ - [L]

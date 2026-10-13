@@ -8,22 +8,12 @@ use ExpressPHP\Http\Request;
 use ExpressPHP\Http\Response;
 use DateTimeImmutable;
 use DateTimeZone;
-use JsonException;
 use Throwable;
 
 final class RequestLogger
 {
-    private const SENSITIVE_KEYS = [
-        'authorization',
-        'cookie',
-        'password',
-        'password_confirmation',
-        'token',
-        'access_token',
-        'refresh_token',
-        'secret',
-        'api_key',
-    ];
+    private const JSON_FLAGS = JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+        | JSON_INVALID_UTF8_SUBSTITUTE;
 
     private static array $config = [];
 
@@ -39,14 +29,10 @@ final class RequestLogger
         }
 
         try {
-            $timezone = new DateTimeZone((string)(self::$config['timezone'] ?? 'UTC'));
-            $now = new DateTimeImmutable('now', $timezone);
-            $directory = rtrim(
-                (string)(self::$config['path'] ?? dirname(__DIR__, 2) . '/storage/logs'),
-                '/',
-            );
+            $now = new DateTimeImmutable('now', new DateTimeZone((string)(self::$config['timezone'] ?? 'UTC')));
+            $directory = self::directory();
 
-            if (!is_dir($directory) && !mkdir($directory, 0775, true) && !is_dir($directory)) {
+            if (!is_dir($directory) && !@mkdir($directory, 0750, true) && !is_dir($directory)) {
                 return;
             }
 
@@ -54,30 +40,31 @@ final class RequestLogger
                 ? (float)APP_STARTED_AT
                 : (float)($_SERVER['REQUEST_TIME_FLOAT'] ?? microtime(true));
 
+            // The raw URL is never logged: its query string can carry secrets that are not redacted.
             $entry = [
                 'timestamp' => $now->format(DATE_ATOM),
-                'request_id' => $request->header('X-Request-ID') ?? bin2hex(random_bytes(8)),
+                'request_id' => $request->requestId(),
                 'method' => $request->method(),
-                'url' => $request->originalURL(),
                 'path' => $request->path(),
+                'query' => Redactor::redact($request->query()),
                 'status' => $response->statusCode(),
                 'duration_ms' => round((microtime(true) - $startedAt) * 1000, 3),
                 'ip' => $request->ip(),
                 'user_id' => $request->user()['id'] ?? null,
-                'user_agent' => $request->userAgent(),
-                'query' => self::redact($request->query()),
+                'user_agent' => Redactor::redact($request->userAgent(), 500),
                 'input' => self::input($request),
-                'request_bytes' => strlen($request->text()),
-                'response_bytes' => strlen($response->body()),
+                'request_bytes' => (int)($request->header('Content-Length') ?? strlen($request->text())),
+                'response_bytes' => $response->isStream()
+                    ? (int)($response->headers()['Content-Length'] ?? 0)
+                    : strlen($response->body()),
                 'memory_peak_bytes' => memory_get_peak_usage(true),
             ];
 
-            $json = json_encode($entry, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-            file_put_contents(
-                $directory . '/' . $now->format('Y-m-d') . '.log',
-                $json . PHP_EOL,
-                FILE_APPEND | LOCK_EX,
-            );
+            $file = $directory . '/' . $now->format('Y-m-d') . '.log';
+            if (!is_file($file)) {
+                LogFiles::prune($directory, (int)(self::$config['retention_days'] ?? 0), $now);
+            }
+            file_put_contents($file, json_encode($entry, self::JSON_FLAGS) . PHP_EOL, FILE_APPEND | LOCK_EX);
         } catch (Throwable) {
             // Request logging is best-effort and must never break the application.
         }
@@ -97,37 +84,50 @@ final class RequestLogger
         return (new DateTimeImmutable('now', $timezone))->format('Y-m-d');
     }
 
+    /**
+     * Returns one page of a day's request log, newest first, without loading the whole file.
+     *
+     * @return array{items: list<array>, total: int}
+     */
+    public static function page(string $date, int $limit, int $offset = 0): array
+    {
+        if (preg_match('/\A\d{4}-\d{2}-\d{2}\z/', $date) !== 1) {
+            return ['items' => [], 'total' => 0];
+        }
+
+        $file = self::directory() . '/' . $date . '.log';
+        if (!is_file($file) || !is_readable($file)) {
+            return ['items' => [], 'total' => 0];
+        }
+
+        $items = [];
+        foreach (LogFiles::tail($file, $limit, $offset) as $line) {
+            $entry = json_decode($line, true);
+            $items[] = is_array($entry) ? $entry : ['raw' => $line];
+        }
+
+        return ['items' => $items, 'total' => LogFiles::countLines($file)];
+    }
+
     private static function input(Request $request): mixed
     {
         $limit = max(0, (int)(self::$config['max_input_bytes'] ?? 4096));
-        if ($limit === 0 || strlen($request->text()) > $limit) {
-            return $request->text() === '' ? null : '[omitted: payload too large]';
-        }
 
         try {
-            return self::redact($request->input());
-        } catch (JsonException) {
-            return '[omitted: malformed JSON]';
+            $input = $request->input();
         } catch (Throwable) {
             return '[omitted: unreadable payload]';
         }
-    }
-
-    private static function redact(mixed $value): mixed
-    {
-        if (!is_array($value)) {
-            return is_string($value) && strlen($value) > 1000
-                ? substr($value, 0, 1000) . '[truncated]'
-                : $value;
+        if ($input === [] || $input === null) {
+            return null;
         }
 
-        foreach ($value as $key => $item) {
-            $normalized = strtolower((string)$key);
-            $value[$key] = in_array($normalized, self::SENSITIVE_KEYS, true)
-                ? '[redacted]'
-                : self::redact($item);
+        // Multipart and form bodies are not in the raw body, so measure what will actually be logged.
+        $size = $request->text() !== '' ? strlen($request->text()) : strlen((string)json_encode($input, JSON_INVALID_UTF8_SUBSTITUTE));
+        if ($limit === 0 || $size > $limit) {
+            return '[omitted: payload too large]';
         }
 
-        return $value;
+        return Redactor::redact($input);
     }
 }

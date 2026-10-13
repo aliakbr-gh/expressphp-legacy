@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ExpressPHP\Core;
 
 use ExpressPHP\Http\Request;
+use ExpressPHP\Logging\Redactor;
 use DateTimeImmutable;
 use DateTimeZone;
 use JsonException;
@@ -59,8 +60,8 @@ final class Debugger
                 $values,
             ),
             'request' => $request === null ? null : [
+                'request_id' => $request->requestId(),
                 'method' => $request->method(),
-                'url' => $request->originalURL(),
                 'path' => $request->path(),
                 'ip' => $request->ip(),
                 'query' => self::redact($request->query()),
@@ -78,7 +79,6 @@ final class Debugger
                 'memory_peak' => self::bytes(memory_get_peak_usage(true)),
                 'php_version' => PHP_VERSION,
                 'sapi' => PHP_SAPI,
-                'request_id' => $_SERVER['HTTP_X_REQUEST_ID'] ?? null,
             ],
         ];
 
@@ -282,13 +282,7 @@ final class Debugger
 
     private static function sensitive(string $key): bool
     {
-        $key = strtolower(str_replace(['-', '_'], '', $key));
-        foreach (['password', 'passwd', 'secret', 'token', 'authorization', 'cookie', 'apikey', 'privatekey'] as $sensitive) {
-            if (str_contains($key, $sensitive)) {
-                return true;
-            }
-        }
-        return false;
+        return Redactor::sensitive($key);
     }
 
     private static function bytes(int $bytes): string

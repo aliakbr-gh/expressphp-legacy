@@ -38,7 +38,7 @@ final class SMTPMailer
         $socket = $this->connect($config);
         try {
             $this->expect($socket, [220]);
-            $hostname = gethostname() ?: 'localhost';
+            $hostname = $config['ehlo_domain'];
             $this->command($socket, 'EHLO ' . $hostname, [250]);
 
             if ($config['encryption'] === 'tls') {
@@ -61,9 +61,14 @@ final class SMTPMailer
 
             $message = $this->message($config, $recipient, $subject, $body, $html, $replyTo);
             $message = preg_replace('/^\./m', '..', $message) ?? $message;
-            fwrite($socket, $message . "\r\n.\r\n");
+            $this->write($socket, $message . "\r\n.\r\n");
             $this->expect($socket, [250]);
-            $this->command($socket, 'QUIT', [221]);
+
+            // The server has accepted the message; a failed goodbye must not report it as undelivered.
+            try {
+                $this->command($socket, 'QUIT', [221]);
+            } catch (Throwable) {
+            }
         } catch (Throwable $exception) {
             throw $exception instanceof MailException
                 ? $exception
@@ -101,7 +106,20 @@ final class SMTPMailer
         if (!in_array($config['encryption'], ['none', 'tls', 'ssl'], true)) {
             throw new MailException('Mail encryption must be none, tls, or ssl.');
         }
+        if ($config['encryption'] === 'none' && $config['username'] !== '') {
+            throw new MailException('SMTP authentication requires tls or ssl encryption.');
+        }
         $this->assertEmail($config['from_address'], 'from address');
+
+        // Identify as the sender's domain rather than leaking the internal server host name.
+        $domain = trim((string)(self::$config['ehlo_domain'] ?? ''));
+        if ($domain === '') {
+            $domain = substr((string)strrchr($config['from_address'], '@'), 1);
+        }
+        if (preg_match('/\A[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?\z/', $domain) !== 1) {
+            throw new MailException('The mail EHLO domain is invalid.');
+        }
+        $config['ehlo_domain'] = $domain;
         return $config;
     }
 
@@ -124,8 +142,27 @@ final class SMTPMailer
 
     private function command(mixed $socket, string $command, array $expected): string
     {
-        fwrite($socket, $command . "\r\n");
+        $this->write($socket, $command . "\r\n");
         return $this->expect($socket, $expected);
+    }
+
+    /**
+     * TLS streams can accept fewer bytes than offered, so write until everything has been sent.
+     */
+    private function write(mixed $socket, string $data): void
+    {
+        $length = strlen($data);
+        $written = 0;
+        while ($written < $length) {
+            $result = fwrite($socket, substr($data, $written));
+            if ($result === false || $result === 0) {
+                $metadata = stream_get_meta_data($socket);
+                throw new MailException(($metadata['timed_out'] ?? false)
+                    ? 'SMTP server timed out.'
+                    : 'SMTP connection closed while sending.');
+            }
+            $written += $result;
+        }
     }
 
     private function expect(mixed $socket, array $expected): string
@@ -159,7 +196,7 @@ final class SMTPMailer
     ): string {
         $headers = [
             'Date: ' . (new DateTimeImmutable())->format(DATE_RFC2822),
-            'Message-ID: <' . bin2hex(random_bytes(16)) . '@' . (gethostname() ?: 'localhost') . '>',
+            'Message-ID: <' . bin2hex(random_bytes(16)) . '@' . $config['ehlo_domain'] . '>',
             'From: ' . $this->mailbox($config['from_address'], $config['from_name']),
             'To: <' . $recipient . '>',
             'Subject: ' . $this->encodeHeader($subject),
@@ -178,10 +215,30 @@ final class SMTPMailer
         return $name === '' ? '<' . $address . '>' : $this->encodeHeader($name) . ' <' . $address . '>';
     }
 
+    /**
+     * Encodes a header value as RFC 2047 words of at most 75 characters, folded onto continuation lines.
+     * Words are split on UTF-8 character boundaries so no character is cut in half.
+     */
     private function encodeHeader(string $value): string
     {
         $value = str_replace(["\r", "\n"], '', $value);
-        return '=?UTF-8?B?' . base64_encode($value) . '?=';
+        if ($value === '') {
+            return '';
+        }
+
+        // 45 raw bytes encode to 60 base64 characters, leaving room for the 12-character =?UTF-8?B?...?= wrapper.
+        $words = [];
+        $chunk = '';
+        foreach (preg_split('//u', $value, -1, PREG_SPLIT_NO_EMPTY) ?: str_split($value) as $character) {
+            if ($chunk !== '' && strlen($chunk) + strlen($character) > 45) {
+                $words[] = '=?UTF-8?B?' . base64_encode($chunk) . '?=';
+                $chunk = '';
+            }
+            $chunk .= $character;
+        }
+        $words[] = '=?UTF-8?B?' . base64_encode($chunk) . '?=';
+
+        return implode("\r\n ", $words);
     }
 
     private function assertEmail(string $email, string $label): void

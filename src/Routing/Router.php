@@ -4,19 +4,25 @@ declare(strict_types=1);
 
 namespace ExpressPHP\Routing;
 
+use ExpressPHP\Core\Config;
+use ExpressPHP\Core\Debugger;
 use ExpressPHP\Http\Request;
 use ExpressPHP\Http\Response;
-use ExpressPHP\Core\Debugger;
+use ReflectionClass;
+use ReflectionNamedType;
 use RuntimeException;
 
 final class Router
 {
     private array $routes = [];
+    private array $registered = [];
     private array $prefixStack = [];
     private array $middlewareStack = [];
 
-    public function __construct(private readonly array $middlewareAliases = [])
-    {
+    public function __construct(
+        private readonly array   $middlewareAliases = [],
+        private readonly ?Config $config = null,
+    ) {
     }
 
     public function get(string $path, callable|array $action, array $middleware = []): self
@@ -57,11 +63,7 @@ final class Router
             $middleware = [];
         } else {
             $middleware = is_array($middlewareOrCallback) ? $middlewareOrCallback : [$middlewareOrCallback];
-            foreach ($middleware as $item) {
-                if (!is_string($item) && !is_callable($item)) {
-                    throw new RuntimeException('Group middleware must be an alias or callable.');
-                }
-            }
+            $this->assertMiddleware($middleware);
         }
 
         $this->prefixStack[] = $this->normalizePath($prefix);
@@ -82,24 +84,35 @@ final class Router
         if (!$this->validAction($action)) {
             throw new RuntimeException('A route action must be callable or [Controller::class, method].');
         }
-        foreach ($middleware as $item) {
-            if (!is_string($item) && !is_callable($item)) {
-                throw new RuntimeException('Route middleware must be an alias or callable.');
-            }
-        }
+        $this->assertMiddleware($middleware);
 
+        $method = strtoupper($method);
         $path = $this->joinPaths(...[...$this->prefixStack, $path]);
+        $key = $method . ' ' . $path;
+        if (isset($this->registered[$key])) {
+            throw new RuntimeException("Route [{$key}] is already registered.");
+        }
+        $this->registered[$key] = true;
+
         $groupMiddleware = $this->middlewareStack === [] ? [] : array_merge(...$this->middlewareStack);
-        $this->routes[] = new Route(strtoupper($method), $path, $action, [...$groupMiddleware, ...$middleware]);
+        $this->routes[] = new Route($method, $path, $action, [...$groupMiddleware, ...$middleware]);
         return $this;
     }
 
     public function dispatch(Request $request, Response $response): Response
     {
-        foreach ($this->routes as $route) {
-            $params = $route->match($request->method(), $request->path());
+        // HEAD runs the GET route; the application omits the body when emitting.
+        $method = $request->method() === 'HEAD' ? 'GET' : $request->method();
+        $path = $request->path();
+        $allowed = [];
 
+        foreach ($this->routes as $route) {
+            $params = $route->matchPath($path);
             if ($params === null) {
+                continue;
+            }
+            if ($route->method !== $method) {
+                $allowed[] = $route->method;
                 continue;
             }
 
@@ -118,7 +131,38 @@ final class Router
             return $result instanceof Response ? $result : $response;
         }
 
+        if ($allowed !== []) {
+            if (in_array('GET', $allowed, true)) {
+                $allowed[] = 'HEAD';
+            }
+            $allowed[] = 'OPTIONS';
+            return $response
+                ->header('Allow', implode(', ', array_unique($allowed)))
+                ->error('Method not allowed', 405);
+        }
+
         return $response->error('Route not found', 404);
+    }
+
+    private function assertMiddleware(array $middleware): void
+    {
+        foreach ($middleware as $item) {
+            if (is_callable($item)) {
+                continue;
+            }
+            if (!is_string($item)) {
+                throw new RuntimeException('Route middleware must be an alias or callable.');
+            }
+
+            // An empty parameter list such as "permission:" would make permission checks pass for everyone.
+            [$alias, $parameterText] = array_pad(explode(':', $item, 2), 2, null);
+            if ($alias === '') {
+                throw new RuntimeException("Middleware [{$item}] has an empty alias.");
+            }
+            if ($parameterText !== null && in_array('', array_map('trim', explode(',', $parameterText)), true)) {
+                throw new RuntimeException("Middleware [{$item}] has an empty parameter.");
+            }
+        }
     }
 
     private function validAction(mixed $action): bool
@@ -135,7 +179,7 @@ final class Router
             if (!class_exists($class)) {
                 throw new RuntimeException("Controller [{$class}] was not found.");
             }
-            $controller = new $class();
+            $controller = $this->instantiate($class);
             if (!is_callable([$controller, $method])) {
                 throw new RuntimeException("Controller action [{$class}::{$method}] is not callable.");
             }
@@ -160,12 +204,31 @@ final class Router
         }
 
         if (is_string($definition) && class_exists($definition)) {
-            $definition = new $definition();
+            $definition = $this->instantiate($definition);
         }
         if (!is_callable($definition)) {
             throw new RuntimeException('Resolved middleware is not callable.');
         }
         return [$definition, $parameters];
+    }
+
+    /**
+     * Creates a controller or middleware. Constructor parameters typed as Config receive the
+     * application configuration; every other parameter keeps its declared default.
+     */
+    private function instantiate(string $class): object
+    {
+        $constructor = (new ReflectionClass($class))->getConstructor();
+        $arguments = [];
+        if ($constructor !== null && $this->config !== null) {
+            foreach ($constructor->getParameters() as $parameter) {
+                $type = $parameter->getType();
+                if ($type instanceof ReflectionNamedType && $type->getName() === Config::class) {
+                    $arguments[$parameter->getName()] = $this->config;
+                }
+            }
+        }
+        return new $class(...$arguments);
     }
 
     private function normalizePath(string $path): string

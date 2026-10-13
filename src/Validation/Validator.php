@@ -11,6 +11,10 @@ use ValueError;
 
 final class Validator
 {
+    // Upper bounds on work for one request: items under a single wildcard and fields expanded in total.
+    private const MAX_WILDCARD_ITEMS = 1000;
+    private const MAX_EXPANDED_FIELDS = 10000;
+
     public static function validate(
         array $input,
         array $rules,
@@ -18,17 +22,35 @@ final class Validator
         array $JSONObjectPaths = [],
     ): array {
         $definitions = self::definitions($rules);
+        // Parents are validated before their children so an invalid container skips its descendants.
+        uksort($definitions, static fn(string|int $left, string|int $right): int
+            => substr_count((string)$left, '.') <=> substr_count((string)$right, '.'));
+        $objectPaths = array_fill_keys($JSONObjectPaths, true);
         $errors = self::unknownKeyErrors($input, array_keys($definitions));
         $fields = [];
+        $failed = [];
         $distinctValues = [];
+        $databaseCache = [];
+        $expanded = 0;
 
         foreach ($definitions as $pattern => $fieldRules) {
             $pattern = (string)$pattern;
-            foreach (self::expandField($input, explode('.', $pattern)) as $field) {
+            $paths = [];
+            self::expandField($input, explode('.', $pattern), '', $paths);
+            $expanded += count($paths);
+            if ($expanded > self::MAX_EXPANDED_FIELDS) {
+                throw new ValidationException(['The request contains too many fields.']);
+            }
+
+            foreach ($paths as $field) {
+                if (self::hasFailedAncestor($failed, $field)) {
+                    continue;
+                }
                 [$exists, $value] = self::get($input, $field);
-                $required = self::requiredRule($input, $fieldRules, $pattern, $field);
+                $required = self::requiredRule($input, $definitions, $fieldRules, $pattern, $field);
                 if ($required !== null && (!$exists || self::empty($value))) {
                     self::addError($errors, $messages, $field, $pattern, $required[0], $required[1]);
+                    $failed[$field] = true;
                     continue;
                 }
                 if (!$exists) {
@@ -46,15 +68,17 @@ final class Validator
                     }
                     $parameters = self::resolveReferences($rule, $parameters, $pattern, $field);
                     if ($rule === 'distinct') {
-                        $seen = $distinctValues[$pattern] ?? [];
-                        $valid = !in_array($value, $seen, true);
-                        $distinctValues[$pattern][] = $value;
+                        // serialize() keeps strict semantics: 1, "1", and 1.0 stay different.
+                        $key = serialize($value);
+                        $valid = !isset($distinctValues[$pattern][$key]);
+                        $distinctValues[$pattern][$key] = true;
                         $normalized = $value;
                     } else {
-                        [$valid, $normalized] = self::check($rule, $value, $parameters, $input, $field, $JSONObjectPaths);
+                        [$valid, $normalized] = self::check($rule, $value, $parameters, $input, $field, $objectPaths, $databaseCache);
                     }
                     if (!$valid) {
                         self::addError($errors, $messages, $field, $pattern, $rule, $parameters);
+                        $failed[$field] = true;
                         $validField = false;
                         break;
                     }
@@ -79,13 +103,27 @@ final class Validator
         return $validated;
     }
 
+    private static function hasFailedAncestor(array $failed, string $field): bool
+    {
+        $position = strrpos($field, '.');
+        while ($position !== false) {
+            $field = substr($field, 0, $position);
+            if (isset($failed[$field])) {
+                return true;
+            }
+            $position = strrpos($field, '.');
+        }
+        return false;
+    }
+
     private static function check(
         string $rule,
         mixed $value,
         array $parameters,
         array $input,
         string $field,
-        array $JSONObjectPaths,
+        array $objectPaths,
+        array &$databaseCache,
     ): array {
         return match ($rule) {
             'string' => [is_string($value), $value],
@@ -93,10 +131,8 @@ final class Validator
             'numeric' => self::numeric($value),
             'boolean' => self::boolean($value),
             'array' => [is_array($value), $value],
-            'object' => [is_array($value)
-                && (!array_is_list($value) || in_array($field, $JSONObjectPaths, true)), $value],
-            'list' => [is_array($value)
-                && array_is_list($value) && !in_array($field, $JSONObjectPaths, true), $value],
+            'object' => [is_array($value) && (!array_is_list($value) || isset($objectPaths[$field])), $value],
+            'list' => [is_array($value) && array_is_list($value) && !isset($objectPaths[$field]), $value],
             'email' => [is_string($value) && filter_var($value, FILTER_VALIDATE_EMAIL) !== false, $value],
             'ip' => [is_string($value) && filter_var($value, FILTER_VALIDATE_IP) !== false, $value],
             'url' => [is_string($value) && filter_var($value, FILTER_VALIDATE_URL) !== false, $value],
@@ -114,8 +150,10 @@ final class Validator
             'date' => [self::dateValue($value) !== null, $value],
             'date_format' => [self::validDateFormat($value, $parameters[0]), $value],
             'before', 'before_or_equal', 'after', 'after_or_equal' => [self::compareDates($rule, $value, $input, $parameters[0]), $value],
-            'unique' => [self::databaseValueAllowed($value) && !self::databaseValueExists($value, $parameters, true), $value],
-            'exists' => [self::databaseValueAllowed($value) && self::databaseValueExists($value, $parameters), $value],
+            'unique' => [self::databaseValueAllowed($value)
+                && !self::cachedDatabaseValueExists($databaseCache, $value, $parameters, true), $value],
+            'exists' => [self::databaseValueAllowed($value)
+                && self::cachedDatabaseValueExists($databaseCache, $value, $parameters), $value],
             default => throw new RuntimeException("Unknown validation rule [{$rule}]."),
         };
     }
@@ -231,7 +269,7 @@ final class Validator
         };
     }
 
-    private static function requiredRule(array $input, array $rules, string $pattern, string $field): ?array
+    private static function requiredRule(array $input, array $definitions, array $rules, string $pattern, string $field): ?array
     {
         foreach ($rules as [$rule, $parameters]) {
             $parameters = self::resolveReferences($rule, $parameters, $pattern, $field);
@@ -239,7 +277,7 @@ final class Validator
                 return [$rule, $parameters];
             }
             if ($rule === 'required_if' || $rule === 'required_unless') {
-                [$exists, $other] = self::get($input, $parameters[0]);
+                [$exists, $other] = self::conditionValue($input, $definitions, $parameters[0]);
                 $matches = $exists && self::matchesCondition($other, array_slice($parameters, 1));
                 if (($rule === 'required_if' && $matches) || ($rule === 'required_unless' && !$matches)) {
                     return [$rule, $parameters];
@@ -256,6 +294,43 @@ final class Validator
             }
         }
         return null;
+    }
+
+    /**
+     * Reads a referenced field normalized by its own type rule, so "01" and 1 match a condition on 1.
+     */
+    private static function conditionValue(array $input, array $definitions, string $path): array
+    {
+        [$exists, $value] = self::get($input, $path);
+        if (!$exists) {
+            return [false, null];
+        }
+
+        foreach (self::definitionFor($definitions, $path) as [$rule]) {
+            if ($rule === 'integer' || $rule === 'numeric' || $rule === 'boolean') {
+                [$valid, $normalized] = self::$rule($value);
+                return [true, $valid ? $normalized : $value];
+            }
+        }
+        return [true, $value];
+    }
+
+    private static function definitionFor(array $definitions, string $path): array
+    {
+        $segments = explode('.', $path);
+        foreach ($definitions as $pattern => $rules) {
+            $patternSegments = explode('.', (string)$pattern);
+            if (count($patternSegments) !== count($segments)) {
+                continue;
+            }
+            foreach ($patternSegments as $index => $segment) {
+                if ($segment !== '*' && $segment !== $segments[$index]) {
+                    continue 2;
+                }
+            }
+            return $rules;
+        }
+        return [];
     }
 
     private static function matchesCondition(mixed $value, array $expected): bool
@@ -472,25 +547,30 @@ final class Validator
         }
     }
 
-    private static function expandField(mixed $input, array $segments, string $prefix = ''): array
+    private static function expandField(mixed $input, array $segments, string $prefix, array &$paths): void
     {
         if ($segments === []) {
-            return [$prefix];
+            $paths[] = $prefix;
+            return;
         }
         $segment = array_shift($segments);
         if ($segment === '*') {
-            $paths = [];
-            if (is_array($input)) {
-                foreach ($input as $key => $value) {
-                    $path = $prefix === '' ? (string)$key : $prefix . '.' . $key;
-                    $paths = [...$paths, ...self::expandField($value, $segments, $path)];
-                }
+            if (!is_array($input)) {
+                return;
             }
-            return $paths;
+            if (count($input) > self::MAX_WILDCARD_ITEMS) {
+                throw new ValidationException([
+                    'The ' . str_replace(['.', '_'], ' ', $prefix) . ' field may not contain more than '
+                    . self::MAX_WILDCARD_ITEMS . ' items.',
+                ]);
+            }
+            foreach ($input as $key => $value) {
+                self::expandField($value, $segments, $prefix === '' ? (string)$key : $prefix . '.' . $key, $paths);
+            }
+            return;
         }
-        $path = $prefix === '' ? $segment : $prefix . '.' . $segment;
         $value = is_array($input) && array_key_exists($segment, $input) ? $input[$segment] : null;
-        return self::expandField($value, $segments, $path);
+        self::expandField($value, $segments, $prefix === '' ? $segment : $prefix . '.' . $segment, $paths);
     }
 
     private static function addError(array &$errors, array $custom, string $field, string $pattern, string $rule, array $parameters): void
@@ -630,6 +710,12 @@ final class Validator
     private static function databaseValueAllowed(mixed $value): bool
     {
         return is_string($value) || is_int($value) || is_bool($value) || (is_float($value) && is_finite($value));
+    }
+
+    private static function cachedDatabaseValueExists(array &$cache, mixed $value, array $parameters, bool $unique = false): bool
+    {
+        $key = serialize([$unique, $parameters, $value]);
+        return $cache[$key] ??= self::databaseValueExists($value, $parameters, $unique);
     }
 
     private static function databaseValueExists(mixed $value, array $parameters, bool $unique = false): bool

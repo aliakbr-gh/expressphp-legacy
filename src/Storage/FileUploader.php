@@ -5,9 +5,24 @@ declare(strict_types=1);
 namespace ExpressPHP\Storage;
 
 use finfo;
+use Throwable;
+use ZipArchive;
 
 final class FileUploader
 {
+    // Rejected even when listed in a configured allowlist: servers may execute or render these.
+    private const BLOCKED_EXTENSIONS = [
+        'php', 'php3', 'php4', 'php5', 'php7', 'php8', 'phtml', 'phar', 'pht', 'phps',
+        'html', 'htm', 'xhtml', 'shtml', 'svg', 'svgz', 'js', 'mjs',
+        'htaccess', 'cgi', 'pl', 'py', 'sh', 'exe', 'bat', 'cmd', 'jsp', 'asp', 'aspx',
+    ];
+
+    // OOXML files are ZIP archives; finfo may only report application/zip, so their structure is checked.
+    private const OFFICE_ENTRIES = [
+        'docx' => 'word/document.xml',
+        'xlsx' => 'xl/workbook.xml',
+    ];
+
     private static array $config = [];
 
     public static function configure(array $config): void
@@ -19,26 +34,31 @@ final class FileUploader
     {
         $this->validateUpload($file);
         $config = [...self::$config, ...$options];
+        // A per-upload MIME list replaces the global per-extension map instead of being ignored by it.
+        if (array_key_exists('allowed_mime_types', $options) && !array_key_exists('mime_types_by_extension', $options)) {
+            unset($config['mime_types_by_extension']);
+        }
         $originalName = $this->originalName($file);
         $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
         $size = (int)($file['size'] ?? 0);
         $MIMEType = $this->MIMEType((string)$file['tmp_name']);
 
         $this->validateSize($size, (int)($config['max_size'] ?? 10 * 1024 * 1024));
-        $this->validateAllowed($extension, $config['allowed_extensions'] ?? [], 'extension');
+        $this->validateExtension($extension, $config['allowed_extensions'] ?? []);
         $this->validateMIMEType($extension, $MIMEType, $config);
+        $this->validateOfficeArchive($extension, $MIMEType, (string)$file['tmp_name']);
 
         $root = $this->root($config);
         $subdirectory = $this->subdirectory($directory);
         $destinationDirectory = $subdirectory === '' ? $root : $root . '/' . $subdirectory;
-        $this->createDirectory($destinationDirectory);
+        $this->createDirectory($destinationDirectory, $config);
 
         $storedName = bin2hex(random_bytes(16)) . ($extension === '' ? '' : '.' . $extension);
         $destination = $destinationDirectory . '/' . $storedName;
         if (!move_uploaded_file((string)$file['tmp_name'], $destination)) {
             throw new FileUploadException('The uploaded file could not be stored.');
         }
-        @chmod($destination, 0644);
+        @chmod($destination, (int)($config['file_mode'] ?? 0640));
 
         return [
             'original_name' => $originalName,
@@ -54,8 +74,16 @@ final class FileUploader
     public function uploadMany(array $files, string $directory = '', array $options = []): array
     {
         $uploaded = [];
-        foreach ($this->normalize($files) as $file) {
-            $uploaded[] = $this->upload($file, $directory, $options);
+        try {
+            foreach ($this->normalize($files) as $file) {
+                $uploaded[] = $this->upload($file, $directory, $options);
+            }
+        } catch (Throwable $exception) {
+            // All or nothing: remove files stored earlier in this batch.
+            foreach ($uploaded as $stored) {
+                @unlink($stored['path']);
+            }
+            throw $exception;
         }
         return $uploaded;
     }
@@ -105,10 +133,24 @@ final class FileUploader
         }
     }
 
+    private function validateExtension(string $extension, mixed $allowed): void
+    {
+        if (!is_array($allowed) || $allowed === []) {
+            throw new FileUploadException('No upload extension allowlist is configured.');
+        }
+        if ($extension === '') {
+            throw new FileUploadException('The uploaded file must have an extension.');
+        }
+        if (in_array($extension, self::BLOCKED_EXTENSIONS, true)) {
+            throw new FileUploadException('The uploaded file extension is not allowed.');
+        }
+        $this->validateAllowed($extension, $allowed, 'extension');
+    }
+
     private function validateAllowed(string $value, array $allowed, string $label): void
     {
         $allowed = array_map(static fn(mixed $item): string => strtolower(trim((string)$item)), $allowed);
-        if ($allowed !== [] && !in_array(strtolower($value), $allowed, true)) {
+        if (!in_array(strtolower($value), $allowed, true)) {
             throw new FileUploadException("The uploaded file {$label} is not allowed.");
         }
     }
@@ -125,7 +167,32 @@ final class FileUploader
             return;
         }
 
-        $this->validateAllowed($MIMEType, $config['allowed_mime_types'] ?? [], 'MIME type');
+        $allowed = $config['allowed_mime_types'] ?? [];
+        if (!is_array($allowed) || $allowed === []) {
+            throw new FileUploadException('No upload MIME type policy is configured.');
+        }
+        $this->validateAllowed($MIMEType, $allowed, 'MIME type');
+    }
+
+    private function validateOfficeArchive(string $extension, string $MIMEType, string $path): void
+    {
+        $entry = self::OFFICE_ENTRIES[$extension] ?? null;
+        if ($entry === null || $MIMEType !== 'application/zip') {
+            return;
+        }
+        if (!class_exists(ZipArchive::class)) {
+            throw new FileUploadException('The uploaded document could not be verified.');
+        }
+
+        $archive = new ZipArchive();
+        if ($archive->open($path, ZipArchive::RDONLY) !== true) {
+            throw new FileUploadException('The uploaded document is not a valid archive.');
+        }
+        $valid = $archive->locateName('[Content_Types].xml') !== false && $archive->locateName($entry) !== false;
+        $archive->close();
+        if (!$valid) {
+            throw new FileUploadException('The uploaded file content does not match its extension.');
+        }
     }
 
     private function root(array $config): string
@@ -134,7 +201,7 @@ final class FileUploader
         if ($path === '') {
             throw new FileUploadException('The upload path is not configured.');
         }
-        $this->createDirectory($path);
+        $this->createDirectory($path, $config);
         $realPath = realpath($path);
         if ($realPath === false) {
             throw new FileUploadException('The upload directory is unavailable.');
@@ -157,9 +224,10 @@ final class FileUploader
         return $directory;
     }
 
-    private function createDirectory(string $directory): void
+    private function createDirectory(string $directory, array $config = []): void
     {
-        if (!is_dir($directory) && !mkdir($directory, 0775, true) && !is_dir($directory)) {
+        $mode = (int)($config['directory_mode'] ?? 0750);
+        if (!is_dir($directory) && !@mkdir($directory, $mode, true) && !is_dir($directory)) {
             throw new FileUploadException('The upload directory could not be created.');
         }
         if (!is_writable($directory)) {

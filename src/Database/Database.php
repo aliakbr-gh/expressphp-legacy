@@ -6,6 +6,7 @@ namespace ExpressPHP\Database;
 
 use PDO;
 use RuntimeException;
+use Throwable;
 
 final class Database
 {
@@ -48,13 +49,46 @@ final class Database
         $options[PDO::ATTR_ERRMODE] ??= PDO::ERRMODE_EXCEPTION;
         $options[PDO::ATTR_DEFAULT_FETCH_MODE] ??= PDO::FETCH_ASSOC;
         $options[PDO::ATTR_EMULATE_PREPARES] ??= false;
+        // A stalled database server must not hold every PHP worker indefinitely.
+        $options[PDO::ATTR_TIMEOUT] ??= max(1, (int)($connection['timeout'] ?? 5));
 
-        return self::$connections[$name] = new PDO(
+        $pdo = new PDO(
             $dsn,
             (string)($connection['username'] ?? ''),
             (string)($connection['password'] ?? ''),
             $options,
         );
+
+        if ($driver === 'mysql') {
+            // TIMESTAMP columns are stored in UTC; reading them in UTC keeps them consistent with PHP.
+            $pdo->prepare('SET time_zone = ?')->execute([(string)($connection['timezone'] ?? '+00:00')]);
+        }
+
+        return self::$connections[$name] = $pdo;
+    }
+
+    /**
+     * Runs the callback in a transaction and returns its result. A call made while a
+     * transaction is already open joins it instead of committing early.
+     */
+    public static function transaction(callable $callback, ?string $name = null): mixed
+    {
+        $pdo = self::connection($name);
+        if ($pdo->inTransaction()) {
+            return $callback($pdo);
+        }
+
+        $pdo->beginTransaction();
+        try {
+            $result = $callback($pdo);
+            $pdo->commit();
+            return $result;
+        } catch (Throwable $exception) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $exception;
+        }
     }
 
     public static function disconnect(?string $name = null): void

@@ -11,6 +11,7 @@ use ExpressPHP\Http\Request;
 use ExpressPHP\Http\Response;
 use ExpressPHP\Http\CORS;
 use ExpressPHP\Http\HttpException;
+use ExpressPHP\Logging\ErrorLogger;
 use ExpressPHP\Logging\RequestLogger;
 use ExpressPHP\Mail\SMTPMailer;
 use ExpressPHP\RateLimit\RateLimitDecision;
@@ -28,21 +29,19 @@ final class Application
 
     public function __construct(private readonly array $config = [])
     {
+        $timezone = $config['timezone'] ?? 'UTC';
+        $logging = [...($config['logging'] ?? []), 'timezone' => $timezone];
+
         Database::configure($config['databases'] ?? []);
         JWT::configure($config['jwt'] ?? []);
         Password::configure($config['password'] ?? []);
         SMTPMailer::configure($config['mail'] ?? []);
         FileUploader::configure($config['uploads'] ?? []);
-        Debugger::configure([
-            ...($config['debug_dump'] ?? []),
-            'timezone' => $config['timezone'] ?? 'UTC',
-        ]);
-        RequestLogger::configure([
-            ...($config['logging'] ?? []),
-            'timezone' => $config['timezone'] ?? 'UTC',
-        ]);
+        Debugger::configure([...($config['debug_dump'] ?? []), 'timezone' => $timezone]);
+        RequestLogger::configure($logging);
+        ErrorLogger::configure($logging);
         $this->rateLimiter = new RateLimiter($config['rate_limiter'] ?? []);
-        $this->router = new Router($config['middleware'] ?? []);
+        $this->router = new Router($config['middleware'] ?? [], new Config($config));
     }
 
     public function get(string $path, callable|array $action, array $middleware = []): self
@@ -96,36 +95,37 @@ final class Application
         $decision = null;
 
         try {
+            if ((bool)($this->config['force_https'] ?? false) && !$request->secure()) {
+                // Refuse rather than redirect: a client following a redirect would resend its credentials.
+                return $this->finish($request, $CORS, (new Response())->error('HTTPS is required', 403));
+            }
+
             if ($request->method() === 'OPTIONS') {
-                return $CORS->apply($request, $this->securityHeaders((new Response())->noContent(), $request));
+                return $this->finish($request, $CORS, (new Response())->noContent());
             }
 
             $decision = $this->rateLimiter->check($request);
             if (!$decision->allowed) {
-                return $CORS->apply(
-                    $request,
-                    $this->securityHeaders($this->rateLimitResponse($decision), $request),
-                );
+                return $this->finish($request, $CORS, $this->rateLimitResponse($decision));
             }
 
-            $response = $this->router->dispatch($request, new Response());
-            return $CORS->apply(
-                $request,
-                $this->securityHeaders($this->rateLimitHeaders($response, $decision), $request),
-            );
+            if ($request->bodyTooLarge()) {
+                $response = (new Response())->error('The request body is too large', 413);
+            } else {
+                $response = $this->router->dispatch($request, new Response());
+            }
+            return $this->finish($request, $CORS, $this->rateLimitHeaders($response, $decision));
         } catch (ValidationException $exception) {
             $response = (new Response())->error($exception->errors(), 422);
         } catch (HttpException $exception) {
             $response = (new Response())->error($exception->getMessage(), $exception->statusCode());
         } catch (PDOException $exception) {
-            $response = $this->databaseErrorResponse($exception);
+            $response = $this->databaseErrorResponse($exception, $request);
         } catch (Throwable $exception) {
-            $debug = (bool)($this->config['debug'] ?? false);
-
-            $message = $debug
+            ErrorLogger::log($exception, $request);
+            $message = (bool)($this->config['debug'] ?? false)
                 ? 'Internal Server Error: ' . $exception->getMessage()
                 : 'Internal Server Error';
-
             $response = (new Response())->error($message, 500);
         }
 
@@ -133,14 +133,23 @@ final class Application
             $response = $this->rateLimitHeaders($response, $decision);
         }
 
-        return $CORS->apply($request, $this->securityHeaders($response, $request));
+        return $this->finish($request, $CORS, $response);
     }
 
     public function run(?Request $request = null): never
     {
-        $request ??= Request::capture($this->config['trusted_proxies'] ?? []);
+        $request ??= Request::capture(
+            $this->config['trusted_proxies'] ?? [],
+            (int)($this->config['request']['max_body_bytes'] ?? 0),
+        );
         $response = $this->dispatch($request);
-        $response->emit();
+
+        try {
+            $response->emit($request->method() !== 'HEAD');
+        } catch (Throwable $exception) {
+            // Streams fail after the status line is sent, so the failure can only be recorded.
+            ErrorLogger::log($exception, $request);
+        }
 
         // Finish the client response before touching the log file when PHP-FPM supports it.
         if (function_exists('fastcgi_finish_request')) {
@@ -149,6 +158,12 @@ final class Application
 
         RequestLogger::write($request, $response);
         exit;
+    }
+
+    private function finish(Request $request, CORS $CORS, Response $response): Response
+    {
+        $response->header('X-Request-ID', $request->requestId());
+        return $CORS->apply($request, $this->securityHeaders($response, $request));
     }
 
     private function rateLimitResponse(RateLimitDecision $decision): Response
@@ -174,9 +189,10 @@ final class Application
         return $this->rateLimitHeaders($response, $decision);
     }
 
-    private function databaseErrorResponse(PDOException $exception): Response
+    private function databaseErrorResponse(PDOException $exception, Request $request): Response
     {
         if ((string)$exception->getCode() !== '23000') {
+            ErrorLogger::log($exception, $request);
             return (new Response())->error('Internal Server Error', 500);
         }
 

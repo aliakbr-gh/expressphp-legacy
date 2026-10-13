@@ -6,12 +6,35 @@ namespace ExpressPHP\Http;
 
 use Closure;
 use ExpressPHP\View\View;
+use InvalidArgumentException;
 use RuntimeException;
 
 final class Response
 {
+    private const JSON_FLAGS = JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE;
+
+    // Served types come from the extension, never from sniffing file contents.
+    private const FILE_TYPES = [
+        'txt' => 'text/plain; charset=utf-8',
+        'csv' => 'text/csv; charset=utf-8',
+        'json' => 'application/json',
+        'pdf' => 'application/pdf',
+        'jpg' => 'image/jpeg',
+        'jpeg' => 'image/jpeg',
+        'png' => 'image/png',
+        'gif' => 'image/gif',
+        'webp' => 'image/webp',
+        'zip' => 'application/zip',
+        'doc' => 'application/msword',
+        'docx' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'xls' => 'application/vnd.ms-excel',
+        'xlsx' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    ];
+
     private int $statusCode = 200;
     private array $headers = [];
+    /** @var list<string> */
+    private array $cookies = [];
     private string $body = '';
     private ?Closure $streamCallback = null;
 
@@ -40,9 +63,7 @@ final class Response
 
     public function json(mixed $data, int $flags = 0): self
     {
-        $this->header('Content-Type', 'application/json; charset=utf-8');
-        $this->body = json_encode($data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | $flags);
-        return $this;
+        return $this->setBody(json_encode($data, self::JSON_FLAGS | $flags), 'application/json; charset=utf-8');
     }
 
     public function success(
@@ -74,33 +95,22 @@ final class Response
 
     public function text(string $text): self
     {
-        $this->header('Content-Type', 'text/plain; charset=utf-8');
-        $this->body = $text;
-        return $this;
+        return $this->setBody($text, 'text/plain; charset=utf-8');
     }
 
     public function html(string $html): self
     {
-        $this->header('Content-Type', 'text/html; charset=utf-8');
-        $this->body = $html;
-        return $this;
+        return $this->setBody($html, 'text/html; charset=utf-8');
     }
 
     public function view(string $name, array $data = []): self
     {
-        $html = $this->views->render($name, $data);
-        $this->streamCallback = null;
-        unset($this->headers['Content-Length'], $this->headers['Content-Disposition']);
-        return $this->html($html);
+        return $this->html($this->views->render($name, $data));
     }
 
     public function send(string $body, ?string $contentType = null): self
     {
-        if ($contentType !== null) {
-            $this->header('Content-Type', $contentType);
-        }
-        $this->body = $body;
-        return $this;
+        return $this->setBody($body, $contentType);
     }
 
     public function cookie(string $name, string $value, array $options = []): self
@@ -112,13 +122,41 @@ final class Response
                 : (int)$options['expires'];
             $parts[] = 'Expires=' . gmdate('D, d M Y H:i:s T', $expires);
         }
-        if (isset($options['max_age'])) $parts[] = 'Max-Age=' . (int)$options['max_age'];
-        $parts[] = 'Path=' . ($options['path'] ?? '/');
-        if (isset($options['domain'])) $parts[] = 'Domain=' . $options['domain'];
-        if (($options['secure'] ?? false) === true) $parts[] = 'Secure';
-        if (($options['http_only'] ?? true) === true) $parts[] = 'HttpOnly';
-        if (isset($options['same_site'])) $parts[] = 'SameSite=' . $options['same_site'];
-        return $this->appendHeader('Set-Cookie', implode('; ', $parts));
+        if (isset($options['max_age'])) {
+            $parts[] = 'Max-Age=' . (int)$options['max_age'];
+        }
+
+        $path = (string)($options['path'] ?? '/');
+        if (preg_match('/\A\/[\x21-\x3a\x3c-\x7e]*\z/', $path) !== 1) {
+            throw new InvalidArgumentException('Cookie paths must start with / and contain no spaces or semicolons.');
+        }
+        $parts[] = 'Path=' . $path;
+
+        if (isset($options['domain'])) {
+            $domain = (string)$options['domain'];
+            if (preg_match('/\A\.?[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?\z/', $domain) !== 1) {
+                throw new InvalidArgumentException('Cookie domains must be plain host names.');
+            }
+            $parts[] = 'Domain=' . $domain;
+        }
+
+        $sameSite = isset($options['same_site']) ? ucfirst(strtolower((string)$options['same_site'])) : null;
+        if ($sameSite !== null && !in_array($sameSite, ['Lax', 'Strict', 'None'], true)) {
+            throw new InvalidArgumentException('Cookie SameSite must be Lax, Strict, or None.');
+        }
+        // Browsers reject SameSite=None cookies that are not Secure.
+        if (($options['secure'] ?? false) === true || $sameSite === 'None') {
+            $parts[] = 'Secure';
+        }
+        if (($options['http_only'] ?? true) === true) {
+            $parts[] = 'HttpOnly';
+        }
+        if ($sameSite !== null) {
+            $parts[] = 'SameSite=' . $sameSite;
+        }
+
+        $this->cookies[] = implode('; ', $parts);
+        return $this;
     }
 
     public function clearCookie(string $name, array $options = []): self
@@ -135,27 +173,46 @@ final class Response
 
     public function attachment(string $filename): self
     {
-        $safe = str_replace(["\r", "\n", '"'], '', basename($filename));
+        $safe = str_replace(["\r", "\n", '"', '\\'], '', basename($filename));
         return $this->header('Content-Disposition', 'attachment; filename="' . $safe . '"');
     }
 
-    public function sendFile(string $path, ?string $downloadName = null): self
-    {
+    /**
+     * Streams a file as a download. The type comes from the extension (or $contentType), never from
+     * sniffing contents, and the response is sandboxed so user files cannot run script on this origin.
+     */
+    public function sendFile(
+        string  $path,
+        ?string $downloadName = null,
+        ?string $contentType = null,
+        bool    $inline = false,
+    ): self {
         if (!is_file($path) || !is_readable($path)) {
             throw new HttpException('File not found', 404);
         }
-        $type = function_exists('mime_content_type') ? mime_content_type($path) : false;
-        $this->header('Content-Type', $type ?: 'application/octet-stream');
-        $this->header('Content-Length', (string)filesize($path));
-        if ($downloadName !== null) {
-            $this->attachment($downloadName);
-        }
-        return $this->stream(static function () use ($path): void {
+
+        $extension = strtolower(pathinfo($downloadName ?? $path, PATHINFO_EXTENSION));
+        $this->stream(static function () use ($path): void {
             $handle = fopen($path, 'rb');
-            if ($handle === false) throw new RuntimeException('Unable to open response file.');
-            fpassthru($handle);
-            fclose($handle);
+            if ($handle === false) {
+                throw new RuntimeException('Unable to open response file.');
+            }
+            try {
+                fpassthru($handle);
+            } finally {
+                fclose($handle);
+            }
         });
+
+        $this->header('Content-Type', $contentType ?? self::FILE_TYPES[$extension] ?? 'application/octet-stream');
+        $this->header('Content-Length', (string)filesize($path));
+        $this->header('Content-Security-Policy', "default-src 'none'; sandbox");
+        if ($inline) {
+            $this->header('Content-Disposition', 'inline');
+        } else {
+            $this->attachment($downloadName ?? basename($path));
+        }
+        return $this;
     }
 
     public function download(string $path, ?string $filename = null): self
@@ -163,20 +220,21 @@ final class Response
         return $this->sendFile($path, $filename ?? basename($path));
     }
 
+    /**
+     * Replaces the body with a stream. Set Content-Length or Content-Disposition after calling this.
+     */
     public function stream(callable $callback, string $contentType = 'application/octet-stream'): self
     {
-        if (!isset($this->headers['Content-Type'])) {
-            $this->header('Content-Type', $contentType);
-        }
+        $this->setBody('', $contentType);
         $this->streamCallback = Closure::fromCallable($callback);
-        $this->body = '';
         return $this;
     }
 
     public function noContent(): self
     {
         $this->statusCode = 204;
-        $this->body = '';
+        $this->setBody('');
+        unset($this->headers['Content-Type']);
         return $this;
     }
 
@@ -190,21 +248,54 @@ final class Response
         return $this->headers;
     }
 
+    /**
+     * @return list<string> Each value is emitted as its own Set-Cookie header.
+     */
+    public function cookies(): array
+    {
+        return $this->cookies;
+    }
+
     public function body(): string
     {
         return $this->body;
     }
 
-    public function emit(): void
+    public function isStream(): bool
+    {
+        return $this->streamCallback !== null;
+    }
+
+    public function emit(bool $includeBody = true): void
     {
         http_response_code($this->statusCode);
         foreach ($this->headers as $name => $value) {
             header($name . ': ' . $value);
+        }
+        foreach ($this->cookies as $cookie) {
+            header('Set-Cookie: ' . $cookie, false);
+        }
+        if (!$includeBody) {
+            return;
         }
         if ($this->streamCallback !== null) {
             ($this->streamCallback)();
             return;
         }
         echo $this->body;
+    }
+
+    /**
+     * Replaces the body and drops any stream and file headers from a previous body.
+     */
+    private function setBody(string $body, ?string $contentType = null): self
+    {
+        $this->streamCallback = null;
+        unset($this->headers['Content-Length'], $this->headers['Content-Disposition'], $this->headers['Content-Security-Policy']);
+        if ($contentType !== null) {
+            $this->header('Content-Type', $contentType);
+        }
+        $this->body = $body;
+        return $this;
     }
 }

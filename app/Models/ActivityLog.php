@@ -33,7 +33,7 @@ final class ActivityLog extends Model
         $statement->bindValue('limit', max(1, $limit), \PDO::PARAM_INT);
         $statement->bindValue('offset', max(0, $offset), \PDO::PARAM_INT);
         $statement->execute();
-        return $statement->fetchAll();
+        return $this->presentAll($statement->fetchAll());
     }
 
     public function countForDate(?string $date = null): int

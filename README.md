@@ -60,14 +60,16 @@ http://localhost/expressphp/api/v1/health/server
 http://localhost/expressphp/api/v1/auth/login
 ```
 
-Upload the whole project as the subdomain document root (for example `public_html` for `digi.100xsoftware.pk`). Then this works with no extra Apache DocumentRoot change:
+In production, point the web server's document root at `public/`. If the host only lets you upload the whole project as
+the document root (for example `public_html` for `digi.100xsoftware.pk`), the root `.htaccess` blocks private files, but
+only while Apache honors it. Check every deployment with `php cli/check-deploy https://your-domain`:
 
 ```text
 https://digi.100xsoftware.pk/api/v1/health/server
 https://digi.100xsoftware.pk/api/v1/auth/login
 ```
 
-On the production host, set `'env' => 'production'`, `'debug' => false`, a unique `jwt.secret`, and
+On the production host, set `'env' => 'production'`, `'debug' => false`, `'force_https' => true`, a unique `jwt.secret`, and
 `'origins' => ['https://digi.100xsoftware.pk']` in the `cors` array. Native mobile apps can omit browser CORS; the origin list
 is for any web client. Keep deployed credentials out of Git.
 
@@ -265,8 +267,26 @@ $rules['username'] = 'required|string|unique:users,username,,' . $user['id'] . '
 Use an ID from a trusted record loaded by the controller; do not let the request choose which record to exclude.
 An omitted ID column defaults to `id`. Uploaded-file size, extension, and detected MIME checks remain in `FileUploader`.
 
+`validate()` reads the query string for `GET`, `HEAD`, and `DELETE`, and the body for `POST`, `PUT`, and `PATCH`; it never
+mixes them. A `POST`, `PUT`, or `PATCH` with query parameters, or a `GET` with a body, is rejected, so secrets cannot be
+accepted from URLs. Route parameters use `validateParams()`. Non-multipart bodies larger than `request.max_body_bytes`
+return 413. One wildcard may hold at most 1,000 items, and items under an invalid parent are not validated.
+
 Unknown fields are rejected. Invalid request values return HTTP 422. Malformed or unsupported rule definitions are
 programming errors and fail before input validation.
+
+Every response carries `X-Request-ID`, which matches the request and error logs. A known path with the wrong method
+returns 405 with an `Allow` header; `HEAD` runs the `GET` route without a body. Times are stored and returned in UTC as
+ISO 8601 (`2026-10-13T08:15:00Z`); `timezone` only names daily log files and backup files.
+
+Models remove the columns listed in `$hidden` from every returned row and format `$dates` columns as ISO 8601. Use
+`Database::transaction(fn () => ...)` to make related writes atomic. A controller or middleware constructor parameter
+typed `ExpressPHP\Core\Config` receives the application configuration:
+
+```php
+public function __construct(private readonly Config $config) {}
+// $this->config->get('rate_limiter.enabled')
+```
 
 Collections use `limit` and `offset`:
 
@@ -296,6 +316,9 @@ Authorization: Bearer <token>
 Refresh creates a replacement token and invalidates previous tokens for that user. Logout invalidates all active tokens
 through `session_version`.
 
+Tokens carry a `kid`. To rotate the signing key without logging everyone out, move the current `kid` and `secret` into
+`jwt.previous_keys`, set a new `kid` and `secret`, and remove the old entry after `jwt.ttl` seconds.
+
 ```php
 ['auth', 'permission:reports.view']
 ['auth', 'role:admin,manager']
@@ -317,8 +340,10 @@ POST /api/v1/rate-limits/clear
 Block and clear accept `{"ip":"192.0.2.10"}`. These match the `php cli/rate-limit` commands and require `rate-limits.view`,
 `rate-limits.block`, or `rate-limits.clear`.
 
-Daily JSON request logs are stored under `storage/logs/`. Passwords, tokens, cookies, authorization headers, and other
-sensitive fields are redacted.
+Daily JSON request logs are stored under `storage/logs/Y-m-d.log`, and unexpected exceptions under
+`storage/logs/errors-Y-m-d.log`. Keys containing words such as password, token, secret, or cookie, and keys such as
+`otp` and `pin`, are redacted; the raw URL is not logged. Files older than `logging.retention_days` are deleted.
+PHP errors are never displayed in responses.
 
 ## Database backups
 
@@ -327,8 +352,10 @@ GET /api/v1/database-backups/download
 ```
 
 This route takes no query parameters. It dumps the current database, zips it, and downloads a file named with the
-application timezone in 12-hour AM/PM form, for example `expressphp_db-2026-09-22-06-58-PM.zip`. Temporary files stay
-under private `storage/backups/` and are deleted after the response. The permission is `database-backups.download`.
+application timezone in 12-hour AM/PM form, for example `expressphp_db-2026-09-22-06-58-PM.zip`. The dump uses one
+consistent snapshot, streams rows without loading tables into memory, and skips generated columns. The plaintext SQL file
+is deleted before the download starts, and the ZIP is deleted afterwards, even if the client disconnects. The permission
+is `database-backups.download`. For large databases, prefer `mysqldump --single-transaction` from cron.
 
 ## Email
 
@@ -374,14 +401,22 @@ public function __construct(
 $uploaded = $this->uploads->upload($request->file('file'), 'documents');
 ```
 
-Global restrictions live in `config/app.php`. Files are stored under the private `storage/uploads/` directory.
+Global restrictions live in `config/app.php`. Files are stored under the private `storage/uploads/` directory with
+`file_mode` and `directory_mode` permissions. Uploads fail when no extension allowlist or MIME policy is configured;
+executable and markup extensions such as `php`, `html`, and `svg` are always rejected. Per-upload `allowed_mime_types`
+replaces the global per-extension map. `uploadMany()` removes already stored files if any file fails.
+
+Serve stored files with `$response->sendFile($path, $downloadName)`. The type comes from the extension, never from the
+file contents, and the response is a sandboxed attachment unless `inline: true` is passed.
 
 ## Commands
 
 ```bash
 php cli/migrate.php status
 php cli/migrate.php migrate
-php cli/migrate.php rollback
+php cli/migrate.php rollback          # prints the plan; production also requires --force
+
+php cli/check-deploy https://api.example.com
 
 php cli/rate-limit status 192.0.2.10
 php cli/rate-limit block 192.0.2.10
@@ -393,9 +428,10 @@ php cli/rate-limit blocked
 
 - Set `env` to `'production'` and `debug` to `false`; debug dumps follow this switch
 - Keep a unique `jwt.secret` generated from at least 32 random bytes (also required locally)
-- Upload the project as the subdomain document root; `/api/v1/...` is served by root `index.php`
+- Point the document root at `public/`, or verify the root `.htaccess` with `php cli/check-deploy`
 - Use a restricted database account
-- Configure exact origins in `cors.origins` (never `*`) and trusted proxies
+- Set `force_https` to `true` (required in production)
+- Configure exact origins in `cors.origins` (never `*`) and `trusted_proxies` as IPs or CIDR ranges
 - Enable HTTPS
 - Keep `config/`, `storage/`, and deployed secrets private and out of public downloads
 - Restrict `config/app.php` permissions to the owner and the PHP service account

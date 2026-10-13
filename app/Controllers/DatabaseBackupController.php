@@ -5,17 +5,20 @@ declare(strict_types=1);
 namespace App\Controllers;
 
 use App\Models\ActivityLog;
+use ExpressPHP\Core\Config;
 use ExpressPHP\Database\Database;
 use ExpressPHP\Database\DatabaseBackup;
 use ExpressPHP\Http\Request;
 use ExpressPHP\Http\Response;
-use RuntimeException;
+use ExpressPHP\Logging\ErrorLogger;
 use Throwable;
 
 final class DatabaseBackupController
 {
-    public function __construct(private readonly ActivityLog $activities = new ActivityLog())
-    {
+    public function __construct(
+        private readonly Config      $config,
+        private readonly ActivityLog $activities = new ActivityLog(),
+    ) {
     }
 
     public function download(Request $request, Response $response): Response
@@ -23,20 +26,25 @@ final class DatabaseBackupController
         $request->validate([]);
 
         try {
-            $config = require dirname(__DIR__, 2) . '/config/app.php';
-            $connectionName = (string)($config['databases']['default'] ?? 'mysql');
-            $connection = $config['databases']['connections'][$connectionName] ?? [];
-            $database = (string)($connection['database'] ?? '');
+            $connectionName = (string)$this->config->get('databases.default', 'mysql');
             $backup = new DatabaseBackup(
                 Database::connection(),
-                $database,
-                (string)($config['backups']['path'] ?? dirname(__DIR__, 2) . '/storage/backups'),
-                (string)($config['timezone'] ?? 'UTC'),
+                (string)$this->config->get("databases.connections.{$connectionName}.database", ''),
+                (string)$this->config->get('backups.path', dirname(__DIR__, 2) . '/storage/backups'),
+                (string)$this->config->get('timezone', 'UTC'),
             );
             $archive = $backup->createZIP();
-        } catch (Throwable) {
+        } catch (Throwable $exception) {
+            ErrorLogger::log($exception, $request);
             return $response->error('Unable to create the database backup', 500);
         }
+
+        // Runs even when the client disconnects mid-download, which skips code after the stream.
+        register_shutdown_function(static function () use ($archive): void {
+            if (is_file($archive['path'])) {
+                @unlink($archive['path']);
+            }
+        });
 
         $user = $request->user();
         $this->activities->record(
@@ -44,26 +52,6 @@ final class DatabaseBackupController
             ($user['name'] ?? $user['username'] ?? 'User') . ' downloaded a database backup',
         );
 
-        return $response
-            ->header('Content-Type', 'application/zip')
-            ->header('Content-Length', (string)filesize($archive['path']))
-            ->attachment($archive['filename'])
-            ->stream(static function () use ($archive): void {
-                try {
-                    $handle = fopen($archive['path'], 'rb');
-                    if ($handle === false) {
-                        throw new RuntimeException('Unable to open the backup archive.');
-                    }
-                    fpassthru($handle);
-                    fclose($handle);
-                } finally {
-                    if (is_file($archive['path'])) {
-                        unlink($archive['path']);
-                    }
-                    if (is_file($archive['sql_path'])) {
-                        unlink($archive['sql_path']);
-                    }
-                }
-            });
+        return $response->sendFile($archive['path'], $archive['filename'], 'application/zip');
     }
 }

@@ -14,8 +14,11 @@ $root = dirname(__DIR__);
 
 require $root . '/src/bootstrap.php';
 
-$command = $argv[1] ?? 'status';
-$connection = $argv[2] ?? null;
+$arguments = array_slice($argv, 1);
+$force = in_array('--force', $arguments, true);
+$positional = array_values(array_filter($arguments, static fn(string $argument): bool => !str_starts_with($argument, '--')));
+$command = $positional[0] ?? 'status';
+$connection = $positional[1] ?? null;
 
 try {
     $config = require $root . '/config/app.php';
@@ -29,10 +32,27 @@ try {
         exit;
     }
 
+    if ($command === 'rollback') {
+        $plan = $migrator->rollbackPlan();
+        if ($plan === []) {
+            echo 'Nothing to do.' . PHP_EOL;
+            exit;
+        }
+
+        echo 'Rollback will run down() for these migrations, which can drop tables and their data:' . PHP_EOL;
+        foreach ($plan as $migration) {
+            echo '  ' . $migration . PHP_EOL;
+        }
+        if (($config['env'] ?? 'production') === 'production' && !$force) {
+            fwrite(STDERR, 'Refusing to roll back in production without --force.' . PHP_EOL);
+            exit(1);
+        }
+    }
+
     $completed = match ($command) {
         'migrate' => $migrator->migrate(),
         'rollback' => $migrator->rollback(),
-        default => throw new RuntimeException('Use: migrate, rollback, or status.'),
+        default => throw new RuntimeException('Use: migrate, rollback [--force], or status.'),
     };
 
     if ($completed === []) {

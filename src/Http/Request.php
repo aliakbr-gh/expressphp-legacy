@@ -4,17 +4,23 @@ declare(strict_types=1);
 
 namespace ExpressPHP\Http;
 
+use ExpressPHP\Validation\ValidationException;
 use ExpressPHP\Validation\Validator;
 use JsonException;
+use stdClass;
 
 final class Request
 {
+    private const BODY_METHODS = ['POST', 'PUT', 'PATCH'];
+
     private array $params = [];
     private bool $jsonDecoded = false;
     private mixed $decodedJSON = null;
     private array $JSONObjectPaths = [];
     private ?array $parsedForm = null;
-    private ?array $authenticatedUser = null;
+    // Shared by reference between clones made by withParams(), so the authenticated user and
+    // request id set during routing stay visible to the code that created the request.
+    private readonly stdClass $context;
 
     public function __construct(
         private readonly string $method,
@@ -27,26 +33,46 @@ final class Request
         private readonly string $rawBody = '',
         private readonly string $basePath = '',
         private readonly array  $trustedProxies = [],
+        private readonly bool   $bodyTooLarge = false,
     ) {
+        $this->context = new stdClass();
+        $this->context->user = null;
+        $this->context->requestId = null;
     }
 
-    public static function capture(array $trustedProxies = []): self
+    public static function capture(array $trustedProxies = [], int $maxBodyBytes = 0): self
     {
-        $rawBody = file_get_contents('php://input');
         $scriptName = str_replace('\\', '/', (string)($_SERVER['SCRIPT_NAME'] ?? ''));
         $basePath = rtrim(dirname($scriptName), '/.');
+        $contentType = strtolower((string)($_SERVER['CONTENT_TYPE'] ?? ''));
+        // Multipart bodies are parsed by PHP and bounded by post_max_size and upload_max_filesize.
+        $limited = $maxBodyBytes > 0 && !str_contains($contentType, 'multipart/form-data');
+        $tooLarge = $limited && (int)($_SERVER['CONTENT_LENGTH'] ?? 0) > $maxBodyBytes;
+        $rawBody = '';
+
+        if (!$tooLarge) {
+            $rawBody = $limited
+                ? file_get_contents('php://input', false, null, 0, $maxBodyBytes + 1)
+                : file_get_contents('php://input');
+            $rawBody = $rawBody === false ? '' : $rawBody;
+            if ($limited && strlen($rawBody) > $maxBodyBytes) {
+                $tooLarge = true;
+                $rawBody = '';
+            }
+        }
 
         return new self(
             strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET'),
             $_SERVER['REQUEST_URI'] ?? '/',
             $_GET,
-            $_POST,
+            $tooLarge ? [] : $_POST,
             $_SERVER,
             $_FILES,
             $_COOKIE,
-            $rawBody === false ? '' : $rawBody,
+            $rawBody,
             $basePath === '' ? '' : '/' . trim($basePath, '/'),
             $trustedProxies,
+            $tooLarge,
         );
     }
 
@@ -67,6 +93,25 @@ final class Request
         return $path === '/' ? '/' : rtrim($path, '/');
     }
 
+    public function bodyTooLarge(): bool
+    {
+        return $this->bodyTooLarge;
+    }
+
+    /**
+     * A per-request identifier for correlating logs. A client value is accepted only when it is short and plain.
+     */
+    public function requestId(): string
+    {
+        if ($this->context->requestId === null) {
+            $supplied = $this->header('X-Request-ID');
+            $this->context->requestId = $supplied !== null && preg_match('/\A[A-Za-z0-9-]{8,64}\z/', $supplied) === 1
+                ? $supplied
+                : bin2hex(random_bytes(8));
+        }
+        return $this->context->requestId;
+    }
+
     public function text(): string
     {
         return $this->rawBody;
@@ -76,13 +121,10 @@ final class Request
     {
         if (!$this->jsonDecoded) {
             try {
-                if ($this->rawBody === '') {
-                    $this->decodedJSON = [];
-                } else {
-                    $this->decodedJSON = json_decode($this->rawBody, true, 512, JSON_THROW_ON_ERROR);
-                    $JSONShape = json_decode($this->rawBody, false, 512, JSON_THROW_ON_ERROR);
-                    $this->collectJSONObjectPaths($JSONShape);
-                }
+                // Decode once as objects so JSON objects can be told apart from lists, then convert to arrays.
+                $this->decodedJSON = $this->rawBody === ''
+                    ? []
+                    : $this->JSONToArray(json_decode($this->rawBody, false, 512, JSON_THROW_ON_ERROR), '');
             } catch (JsonException) {
                 throw new HttpException('Malformed JSON request body', 400);
             }
@@ -107,15 +149,32 @@ final class Request
         return is_array($data) ? ($data[$key] ?? $default) : $default;
     }
 
+    /**
+     * Validates the query string for GET-style requests and the body for POST, PUT, and PATCH.
+     * Values are never read from both, so secrets cannot be accepted from the URL on write requests.
+     */
     public function validate(array $rules, array $messages = []): array
     {
+        if (!in_array($this->method, self::BODY_METHODS, true)) {
+            if ($this->hasBody()) {
+                throw new ValidationException(["A request body is not allowed for {$this->method} requests."]);
+            }
+            return Validator::validate($this->query, $rules, $messages);
+        }
+
+        if ($this->query !== []) {
+            throw new ValidationException(array_map(
+                fn(string|int $key): string => "Query parameter {$key} is not allowed for {$this->method} requests.",
+                array_keys($this->query),
+            ));
+        }
+
         $input = $this->input();
-        $input = is_array($input) ? $input : [];
         return Validator::validate(
-            array_replace_recursive($this->query, $input),
+            is_array($input) ? $input : [],
             $rules,
             $messages,
-            $this->isJSON() ? $this->JSONObjectPaths : [],
+            $this->isJSON() ? array_keys($this->JSONObjectPaths) : [],
         );
     }
 
@@ -127,27 +186,6 @@ final class Request
     public function query(?string $key = null, mixed $default = null): mixed
     {
         return $key === null ? $this->query : ($this->query[$key] ?? $default);
-    }
-
-    private function collectJSONObjectPaths(mixed $value, string $path = ''): void
-    {
-        if ($value instanceof \stdClass) {
-            if ($path !== '') {
-                $this->JSONObjectPaths[] = $path;
-            }
-            foreach (get_object_vars($value) as $key => $child) {
-                $childPath = $path === '' ? (string)$key : $path . '.' . $key;
-                $this->collectJSONObjectPaths($child, $childPath);
-            }
-            return;
-        }
-
-        if (is_array($value)) {
-            foreach ($value as $key => $child) {
-                $childPath = $path === '' ? (string)$key : $path . '.' . $key;
-                $this->collectJSONObjectPaths($child, $childPath);
-            }
-        }
     }
 
     public function param(?string $key = null, mixed $default = null): mixed
@@ -225,16 +263,34 @@ final class Request
         return $this->cookies[$key] ?? $default;
     }
 
+    /**
+     * Returns the client address. Behind trusted proxies, X-Forwarded-For is read from the right and the
+     * first address that is not a trusted proxy is used, because entries further left are client-controlled.
+     */
     public function ip(): string
     {
-        $remote = (string)($this->server['REMOTE_ADDR'] ?? '0.0.0.0');
-        if (in_array($remote, $this->trustedProxies, true)) {
-            $forwarded = $this->header('X-Forwarded-For');
-            if ($forwarded !== null) {
-                return trim(explode(',', $forwarded)[0]);
+        $remote = IpAddress::normalize((string)($this->server['REMOTE_ADDR'] ?? '')) ?? '0.0.0.0';
+        if (!$this->fromTrustedProxy()) {
+            return $remote;
+        }
+
+        $forwarded = $this->header('X-Forwarded-For');
+        if ($forwarded === null) {
+            return $remote;
+        }
+
+        $client = $remote;
+        foreach (array_reverse(explode(',', $forwarded)) as $hop) {
+            $address = IpAddress::normalize($hop);
+            if ($address === null) {
+                break;
+            }
+            $client = $address;
+            if (!IpAddress::inAny($address, $this->trustedProxies)) {
+                return $address;
             }
         }
-        return $remote;
+        return $client;
     }
 
     public function bearerToken(): ?string
@@ -254,11 +310,7 @@ final class Request
             ];
         }
 
-        $authorization = $this->header('Authorization')
-            ?? (isset($this->server['REDIRECT_HTTP_AUTHORIZATION'])
-                ? (string)$this->server['REDIRECT_HTTP_AUTHORIZATION']
-                : null);
-
+        $authorization = $this->header('Authorization');
         if ($authorization === null || preg_match('/^Basic\s+(.+)$/i', $authorization, $match) !== 1) {
             return null;
         }
@@ -274,13 +326,13 @@ final class Request
 
     public function setUser(array $user): self
     {
-        $this->authenticatedUser = $user;
+        $this->context->user = $user;
         return $this;
     }
 
     public function user(): ?array
     {
-        return $this->authenticatedUser;
+        return $this->context->user;
     }
 
     public function userAgent(): ?string
@@ -290,11 +342,15 @@ final class Request
 
     public function protocol(): string
     {
-        $remote = (string)($this->server['REMOTE_ADDR'] ?? '');
-        if (in_array($remote, $this->trustedProxies, true)) {
+        if ($this->fromTrustedProxy()) {
             $forwarded = $this->header('X-Forwarded-Proto');
             if ($forwarded !== null) {
-                return strtolower(trim(explode(',', $forwarded)[0]));
+                // The right-most value was set by the nearest proxy, which is the one we trust.
+                $values = explode(',', $forwarded);
+                $protocol = strtolower(trim((string)end($values)));
+                if ($protocol === 'https' || $protocol === 'http') {
+                    return $protocol;
+                }
             }
         }
         return (!empty($this->server['HTTPS']) && $this->server['HTTPS'] !== 'off') ? 'https' : 'http';
@@ -341,6 +397,34 @@ final class Request
             }
         }
         return false;
+    }
+
+    private function fromTrustedProxy(): bool
+    {
+        return $this->trustedProxies !== []
+            && IpAddress::inAny((string)($this->server['REMOTE_ADDR'] ?? ''), $this->trustedProxies);
+    }
+
+    private function hasBody(): bool
+    {
+        return $this->form !== [] || !in_array(trim($this->rawBody), ['', '{}', '[]'], true);
+    }
+
+    private function JSONToArray(mixed $value, string $path): mixed
+    {
+        if ($value instanceof stdClass) {
+            if ($path !== '') {
+                $this->JSONObjectPaths[$path] = true;
+            }
+            $value = get_object_vars($value);
+        } elseif (!is_array($value)) {
+            return $value;
+        }
+
+        foreach ($value as $key => $child) {
+            $value[$key] = $this->JSONToArray($child, $path === '' ? (string)$key : $path . '.' . $key);
+        }
+        return $value;
     }
 
     private function formData(): array

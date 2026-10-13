@@ -8,10 +8,13 @@ use DateTimeImmutable;
 use DateTimeZone;
 use PDO;
 use RuntimeException;
+use Throwable;
 use ZipArchive;
 
 final class DatabaseBackup
 {
+    private const ROWS_PER_INSERT = 100;
+
     public function __construct(
         private readonly PDO $connection,
         private readonly string $database,
@@ -21,12 +24,18 @@ final class DatabaseBackup
     }
 
     /**
-     * @return array{path: string, sql_path: string, filename: string}
+     * Writes a ZIP containing an SQL dump and returns its path. The plaintext SQL file is always
+     * removed before returning; the caller owns the ZIP and must delete it when finished.
+     *
+     * @return array{path: string, filename: string}
      */
     public function createZIP(): array
     {
         if (!class_exists(ZipArchive::class)) {
             throw new RuntimeException('The ZIP PHP extension is required for database backups.');
+        }
+        if ($this->connection->getAttribute(PDO::ATTR_DRIVER_NAME) !== 'mysql') {
+            throw new RuntimeException('Database backups support MySQL connections only.');
         }
 
         $this->ensureDirectory();
@@ -36,7 +45,6 @@ final class DatabaseBackup
         $token = bin2hex(random_bytes(16));
         $sqlPath = $this->path . '/' . $token . '.sql';
         $zipPath = $this->path . '/' . $token . '.zip';
-        $filename = $basename . '.zip';
 
         try {
             $this->writeSQL($sqlPath, $basename . '.sql', $stamp);
@@ -48,26 +56,37 @@ final class DatabaseBackup
                 $archive->close();
                 throw new RuntimeException('Unable to add the backup file to the archive.');
             }
-            $archive->close();
-        } catch (RuntimeException $exception) {
-            $this->delete($sqlPath);
+            // ZipArchive reads the source file during close(), so a failure here means an incomplete archive.
+            if ($archive->close() !== true) {
+                throw new RuntimeException('Unable to finalize the backup archive.');
+            }
+            @chmod($zipPath, 0600);
+        } catch (Throwable $exception) {
             $this->delete($zipPath);
-            throw $exception;
+            throw $exception instanceof RuntimeException
+                ? $exception
+                : new RuntimeException('Unable to create the database backup.', 0, $exception);
+        } finally {
+            $this->delete($sqlPath);
         }
 
         return [
             'path' => $zipPath,
-            'sql_path' => $sqlPath,
-            'filename' => $filename,
+            'filename' => $basename . '.zip',
         ];
     }
 
     private function writeSQL(string $sqlPath, string $sqlName, string $stamp): void
     {
-        $handle = fopen($sqlPath, 'wb');
+        $handle = @fopen($sqlPath, 'xb');
         if ($handle === false) {
             throw new RuntimeException('Unable to create the backup file.');
         }
+        @chmod($sqlPath, 0600);
+
+        // One snapshot for every table, so related rows are captured at the same moment.
+        $this->connection->exec('SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+        $this->connection->exec('START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY');
 
         try {
             $this->write(
@@ -75,7 +94,7 @@ final class DatabaseBackup
                 "-- ExpressPHP database backup\n" .
                 '-- File: ' . $sqlName . "\n" .
                 '-- Created: ' . $stamp . "\n\n" .
-                "SET NAMES utf8mb4;\nSET FOREIGN_KEY_CHECKS=0;\n\n",
+                "SET NAMES utf8mb4;\nSET FOREIGN_KEY_CHECKS=0;\nSET time_zone = '+00:00';\n\n",
             );
 
             foreach ($this->tables() as $table) {
@@ -86,50 +105,87 @@ final class DatabaseBackup
                     throw new RuntimeException('Unable to read the table structure.');
                 }
 
-                $this->write(
-                    $handle,
-                    'DROP TABLE IF EXISTS ' . $quoted . ";\n" . $statement . ";\n\n",
-                );
-                $this->writeRows($handle, $table, $quoted);
+                $this->write($handle, 'DROP TABLE IF EXISTS ' . $quoted . ";\n" . $statement . ";\n\n");
+                $this->writeRows($handle, $quoted, $this->storedColumns($table));
                 $this->write($handle, "\n");
             }
 
             $this->write($handle, "SET FOREIGN_KEY_CHECKS=1;\n");
+            if (!fflush($handle)) {
+                throw new RuntimeException('Unable to write the backup file.');
+            }
         } finally {
+            $this->connection->exec('ROLLBACK');
             fclose($handle);
         }
     }
 
-    private function writeRows($handle, string $table, string $quoted): void
+    /**
+     * Streams every row with an unbuffered query, so memory stays flat and no OFFSET paging is needed.
+     *
+     * @param list<string> $columns
+     */
+    private function writeRows($handle, string $quoted, array $columns): void
     {
-        $offset = 0;
-        $chunk = 200;
-
-        while (true) {
-            $statement = $this->connection->query(
-                'SELECT * FROM ' . $quoted . ' LIMIT ' . $chunk . ' OFFSET ' . $offset,
-            );
-            $rows = $statement === false ? [] : $statement->fetchAll();
-            if ($rows === []) {
-                return;
-            }
-
-            $columns = array_map($this->quoteName(...), array_keys($rows[0]));
-            $columnList = implode(', ', $columns);
-
-            foreach ($rows as $row) {
-                $values = [];
-                foreach ($row as $value) {
-                    $values[] = $this->SQLValue($value);
-                }
-                $this->write(
-                    $handle,
-                    'INSERT INTO ' . $quoted . ' (' . $columnList . ') VALUES (' . implode(', ', $values) . ");\n",
-                );
-            }
-
-            $offset += $chunk;
+        if ($columns === []) {
+            return;
         }
+
+        $columnList = implode(', ', array_map($this->quoteName(...), $columns));
+        $prefix = 'INSERT INTO ' . $quoted . ' (' . $columnList . ') VALUES ';
+        $attribute = $this->bufferedQueryAttribute();
+        $this->connection->setAttribute($attribute, false);
+        $statement = null;
+
+        try {
+            $statement = $this->connection->query('SELECT ' . $columnList . ' FROM ' . $quoted);
+            $batch = [];
+            while (($row = $statement->fetch(PDO::FETCH_NUM)) !== false) {
+                $batch[] = '(' . implode(', ', array_map($this->SQLValue(...), $row)) . ')';
+                if (count($batch) === self::ROWS_PER_INSERT) {
+                    $this->write($handle, $prefix . implode(",\n", $batch) . ";\n");
+                    $batch = [];
+                }
+            }
+            if ($batch !== []) {
+                $this->write($handle, $prefix . implode(",\n", $batch) . ";\n");
+            }
+        } finally {
+            // An open unbuffered cursor blocks every later query on this connection, including ROLLBACK.
+            $statement?->closeCursor();
+            $this->connection->setAttribute($attribute, true);
+        }
+    }
+
+    /**
+     * Generated columns are computed by MySQL and cannot be inserted, so they are left out of the dump.
+     *
+     * @return list<string>
+     */
+    private function storedColumns(string $table): array
+    {
+        $statement = $this->connection->prepare(
+            'SELECT COLUMN_NAME, EXTRA FROM information_schema.COLUMNS ' .
+            'WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION'
+        );
+        $statement->execute([$table]);
+
+        $columns = [];
+        foreach ($statement->fetchAll(PDO::FETCH_NUM) as [$name, $extra]) {
+            $extra = strtoupper((string)$extra);
+            if (!str_contains($extra, 'GENERATED') && !str_contains($extra, 'VIRTUAL') && !str_contains($extra, 'PERSISTENT')) {
+                $columns[] = (string)$name;
+            }
+        }
+        return $columns;
+    }
+
+    private function bufferedQueryAttribute(): int
+    {
+        // PHP 8.4 adds Pdo\Mysql constants; the PDO::MYSQL_* aliases are deprecated from PHP 8.5.
+        return class_exists('Pdo\Mysql')
+            ? constant('Pdo\Mysql::ATTR_USE_BUFFERED_QUERY')
+            : constant('PDO::MYSQL_ATTR_USE_BUFFERED_QUERY');
     }
 
     private function SQLValue(mixed $value): string
@@ -157,13 +213,11 @@ final class DatabaseBackup
      */
     private function tables(): array
     {
-        $statement = $this->connection->query(
-            "SHOW FULL TABLES WHERE Table_type = 'BASE TABLE'",
-        );
+        $statement = $this->connection->query("SHOW FULL TABLES WHERE Table_type = 'BASE TABLE'");
         $tables = [];
 
-        foreach ($statement === false ? [] : $statement->fetchAll() as $row) {
-            $name = array_values($row)[0] ?? null;
+        foreach ($statement === false ? [] : $statement->fetchAll(PDO::FETCH_NUM) as $row) {
+            $name = $row[0] ?? null;
             if (is_string($name) && $name !== '') {
                 $tables[] = $name;
             }
@@ -183,14 +237,20 @@ final class DatabaseBackup
 
     private function write($handle, string $sql): void
     {
-        if (fwrite($handle, $sql) === false) {
-            throw new RuntimeException('Unable to write the backup file.');
+        $length = strlen($sql);
+        $written = 0;
+        while ($written < $length) {
+            $result = fwrite($handle, substr($sql, $written));
+            if ($result === false || $result === 0) {
+                throw new RuntimeException('Unable to write the backup file.');
+            }
+            $written += $result;
         }
     }
 
     private function ensureDirectory(): void
     {
-        if (!is_dir($this->path) && !mkdir($this->path, 0775, true) && !is_dir($this->path)) {
+        if (!is_dir($this->path) && !@mkdir($this->path, 0750, true) && !is_dir($this->path)) {
             throw new RuntimeException('Unable to create the backup storage directory.');
         }
     }
@@ -198,7 +258,7 @@ final class DatabaseBackup
     private function delete(string $path): void
     {
         if (is_file($path)) {
-            unlink($path);
+            @unlink($path);
         }
     }
 }

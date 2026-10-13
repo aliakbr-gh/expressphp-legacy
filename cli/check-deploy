@@ -1,0 +1,64 @@
+<?php
+
+declare(strict_types=1);
+
+if (PHP_SAPI !== 'cli') {
+    http_response_code(404);
+    exit;
+}
+
+// Requests private paths from a deployed site and fails if any of them is served.
+$base = rtrim((string)($argv[1] ?? ''), '/');
+if (preg_match('#\Ahttps?://[^/\s]+(?:/[^\s]*)?\z#i', $base) !== 1) {
+    fwrite(STDERR, 'Use: php cli/check-deploy https://api.example.com[/base-path]' . PHP_EOL);
+    exit(1);
+}
+if (!filter_var(ini_get('allow_url_fopen'), FILTER_VALIDATE_BOOL)) {
+    fwrite(STDERR, 'allow_url_fopen must be enabled for this check.' . PHP_EOL);
+    exit(1);
+}
+
+$paths = [
+    '/.git/HEAD',
+    '/.git/config',
+    '/.htaccess',
+    '/.gitignore',
+    '/config/app.php',
+    '/src/bootstrap.php',
+    '/app/Models/User.php',
+    '/routes/api.php',
+    '/migrations/',
+    '/cli/migrate.php',
+    '/storage/logs/',
+    '/storage/backups/',
+    '/storage/uploads/',
+    '/storage/rate-limiter/',
+    '/README.md',
+    '/CLAUDE_QA_REVIEW.md',
+];
+
+$exposed = 0;
+foreach ($paths as $path) {
+    $context = stream_context_create([
+        'http' => ['method' => 'GET', 'ignore_errors' => true, 'follow_location' => 0, 'timeout' => 10],
+    ]);
+    $body = @file_get_contents($base . $path, false, $context, 0, 2048);
+    $headers = function_exists('http_get_last_response_headers')
+        ? (http_get_last_response_headers() ?? [])
+        : ($http_response_header ?? []);
+    $status = preg_match('#\AHTTP/\S+\s+(\d{3})#', (string)($headers[0] ?? ''), $match) === 1 ? (int)$match[1] : 0;
+
+    // 403, 404, and 405 are safe; any 2xx or 3xx means the path is reachable or redirected somewhere.
+    $safe = in_array($status, [401, 403, 404, 405], true);
+    $exposed += $safe ? 0 : 1;
+    printf("%-8s %3s  %s%s", $safe ? 'OK' : 'EXPOSED', $status === 0 ? '---' : (string)$status, $path, PHP_EOL);
+    if ($body === false && $status === 0) {
+        fwrite(STDERR, "  could not connect to {$base}{$path}" . PHP_EOL);
+    }
+}
+
+if ($exposed > 0) {
+    fwrite(STDERR, PHP_EOL . "{$exposed} private path(s) are reachable. Point the document root at public/ or fix .htaccess." . PHP_EOL);
+    exit(1);
+}
+echo PHP_EOL . 'All private paths are blocked.' . PHP_EOL;

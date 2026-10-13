@@ -6,6 +6,9 @@ $root = dirname(__DIR__);
 
 defined('APP_STARTED_AT') || define('APP_STARTED_AT', microtime(true));
 
+// All stored and returned times are UTC; config "timezone" only names local log files and backups.
+date_default_timezone_set('UTC');
+
 spl_autoload_register(static function (string $class) use ($root): void {
     $namespaces = [
         'App\\' => $root . '/app/',

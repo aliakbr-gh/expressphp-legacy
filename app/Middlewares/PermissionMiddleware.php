@@ -19,6 +19,10 @@ final class PermissionMiddleware
             return null;
         }
 
+        if ($required === []) {
+            return $response->error('You do not have permission to perform this action', 403);
+        }
+
         $granted = array_column($user['permissions'] ?? [], 'slug');
         foreach ($required as $permission) {
             if (!in_array($permission, $granted, true)) {

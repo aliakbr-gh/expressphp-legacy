@@ -6,32 +6,45 @@ namespace ExpressPHP\Routing;
 
 final class Route
 {
+    private readonly string $pattern;
+    private readonly array $parameterNames;
+
     public function __construct(
         public readonly string $method,
         public readonly string $path,
         public readonly mixed  $action,
         public readonly array  $middleware = [],
     ) {
+        $parameterNames = [];
+        $pattern = preg_replace_callback(
+            '/\\\\\{([A-Za-z_][A-Za-z0-9_]*)\\\\\}/',
+            static function (array $match) use (&$parameterNames): string {
+                $parameterNames[] = $match[1];
+                return '([^/]+)';
+            },
+            preg_quote($path, '#'),
+        );
+
+        $this->pattern = '#^' . $pattern . '$#';
+        $this->parameterNames = $parameterNames;
     }
 
     public function match(string $method, string $path): ?array
     {
-        if ($this->method !== $method) {
-            return null;
-        }
+        return $this->method === $method ? $this->matchPath($path) : null;
+    }
 
-        $parameterNames = [];
-        $quoted = preg_quote($this->path, '#');
-        $pattern = preg_replace_callback('/\\\\\{([A-Za-z_][A-Za-z0-9_]*)\\\\\}/', static function (array $match) use (&$parameterNames): string {
-            $parameterNames[] = $match[1];
-            return '([^/]+)';
-        }, $quoted);
-
-        if ($pattern === null || preg_match('#^' . $pattern . '$#', $path, $matches) !== 1) {
+    /**
+     * Matches the path regardless of method and returns the decoded route parameters.
+     */
+    public function matchPath(string $path): ?array
+    {
+        if (preg_match($this->pattern, $path, $matches) !== 1) {
             return null;
         }
 
         array_shift($matches);
-        return array_combine($parameterNames, array_map('urldecode', $matches)) ?: [];
+        // rawurldecode keeps a literal "+" in a path segment; "%2F" decodes to "/" inside one parameter.
+        return array_combine($this->parameterNames, array_map('rawurldecode', $matches)) ?: [];
     }
 }

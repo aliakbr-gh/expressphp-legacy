@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ExpressPHP\Database;
 
 use PDO;
+use PDOStatement;
 use RuntimeException;
 
 abstract class Model
@@ -13,11 +14,19 @@ abstract class Model
     protected string $primaryKey = 'id';
     protected ?string $connection = null;
     protected array $fillable = [];
+    // Columns removed from every row this model returns, such as password hashes.
+    protected array $hidden = [];
+    // UTC TIMESTAMP/DATETIME columns returned as ISO 8601, for example 2026-10-13T08:15:00Z.
+    protected array $dates = ['created_at', 'updated_at'];
 
-    public function all(): array
+    public function all(?int $limit = null): array
     {
-        $statement = $this->pdo()->query('SELECT * FROM ' . $this->identifier($this->table));
-        return $statement->fetchAll();
+        $sql = 'SELECT * FROM ' . $this->identifier($this->table);
+        if ($limit === null) {
+            return $this->presentAll($this->pdo()->query($sql)->fetchAll());
+        }
+
+        return $this->presentAll($this->run($sql . ' LIMIT :limit', ['limit' => max(1, $limit)])->fetchAll());
     }
 
     public function paginate(int $limit, int $offset = 0): array
@@ -27,11 +36,7 @@ abstract class Model
             $this->identifier($this->table),
             $this->identifier($this->primaryKey),
         );
-        $statement = $this->pdo()->prepare($sql);
-        $statement->bindValue('limit', max(1, $limit), PDO::PARAM_INT);
-        $statement->bindValue('offset', max(0, $offset), PDO::PARAM_INT);
-        $statement->execute();
-        return $statement->fetchAll();
+        return $this->presentAll($this->run($sql, ['limit' => max(1, $limit), 'offset' => max(0, $offset)])->fetchAll());
     }
 
     public function count(): int
@@ -46,29 +51,25 @@ abstract class Model
         return $this->firstWhere($this->primaryKey, $id);
     }
 
-    public function where(string $column, mixed $value): array
+    public function where(string $column, mixed $value, ?int $limit = null): array
     {
         $sql = sprintf(
             'SELECT * FROM %s WHERE %s = :value',
             $this->identifier($this->table),
             $this->identifier($column),
         );
-        $statement = $this->pdo()->prepare($sql);
-        $statement->execute(['value' => $value]);
-        return $statement->fetchAll();
+        $bindings = ['value' => $value];
+        if ($limit !== null) {
+            $sql .= ' LIMIT :limit';
+            $bindings['limit'] = max(1, $limit);
+        }
+        return $this->presentAll($this->run($sql, $bindings)->fetchAll());
     }
 
     public function firstWhere(string $column, mixed $value): ?array
     {
-        $sql = sprintf(
-            'SELECT * FROM %s WHERE %s = :value LIMIT 1',
-            $this->identifier($this->table),
-            $this->identifier($column),
-        );
-        $statement = $this->pdo()->prepare($sql);
-        $statement->execute(['value' => $value]);
-        $row = $statement->fetch();
-        return $row === false ? null : $row;
+        $row = $this->rawFirstWhere($column, $value);
+        return $row === null ? null : $this->present($row);
     }
 
     public function create(array $attributes): array
@@ -85,8 +86,8 @@ abstract class Model
             implode(', ', array_map($this->identifier(...), $columns)),
             implode(', ', array_map(static fn(string $column): string => ':' . $column, $columns)),
         );
-        $this->pdo()->prepare($sql)->execute($attributes);
-        return $this->find((string)$this->pdo()->lastInsertId()) ?? $attributes;
+        $this->run($sql, $attributes);
+        return $this->find((string)$this->pdo()->lastInsertId()) ?? $this->present($attributes);
     }
 
     public function update(int|string $id, array $attributes): bool
@@ -106,7 +107,8 @@ abstract class Model
             implode(', ', $sets),
             $this->identifier($this->primaryKey),
         );
-        return $this->pdo()->prepare($sql)->execute($attributes);
+        $this->run($sql, $attributes);
+        return true;
     }
 
     public function delete(int|string $id): bool
@@ -116,12 +118,66 @@ abstract class Model
             $this->identifier($this->table),
             $this->identifier($this->primaryKey),
         );
-        return $this->pdo()->prepare($sql)->execute(['id' => $id]);
+        $this->run($sql, ['id' => $id]);
+        return true;
     }
 
     protected function pdo(): PDO
     {
         return Database::connection($this->connection);
+    }
+
+    /**
+     * Reads one row including hidden columns, for internal checks such as password verification.
+     */
+    protected function rawFirstWhere(string $column, mixed $value): ?array
+    {
+        $sql = sprintf(
+            'SELECT * FROM %s WHERE %s = :value LIMIT 1',
+            $this->identifier($this->table),
+            $this->identifier($column),
+        );
+        $row = $this->run($sql, ['value' => $value])->fetch();
+        return $row === false ? null : $row;
+    }
+
+    /**
+     * Prepares and executes a statement, binding each value with a PDO type matching its PHP type.
+     * Binding everything as a string would turn false into '', which strict MySQL rejects for integers.
+     */
+    protected function run(string $sql, array $bindings = []): PDOStatement
+    {
+        $statement = $this->pdo()->prepare($sql);
+        foreach ($bindings as $name => $value) {
+            [$value, $type] = match (true) {
+                $value === null => [null, PDO::PARAM_NULL],
+                is_bool($value) => [(int)$value, PDO::PARAM_INT],
+                is_int($value) => [$value, PDO::PARAM_INT],
+                default => [(string)$value, PDO::PARAM_STR],
+            };
+            $statement->bindValue(is_int($name) ? $name + 1 : $name, $value, $type);
+        }
+        $statement->execute();
+        return $statement;
+    }
+
+    protected function present(array $row): array
+    {
+        foreach ($this->hidden as $column) {
+            unset($row[$column]);
+        }
+        foreach ($this->dates as $column) {
+            $value = $row[$column] ?? null;
+            if (is_string($value) && preg_match('/\A\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\z/', $value) === 1) {
+                $row[$column] = str_replace(' ', 'T', $value) . 'Z';
+            }
+        }
+        return $row;
+    }
+
+    protected function presentAll(array $rows): array
+    {
+        return array_map($this->present(...), $rows);
     }
 
     protected function identifier(string $identifier): string
