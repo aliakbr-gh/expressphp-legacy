@@ -43,8 +43,9 @@ try {
         foreach ($plan as $migration) {
             echo '  ' . $migration . PHP_EOL;
         }
-        if (($config['env'] ?? 'production') === 'production' && !$force) {
-            fwrite(STDERR, 'Refusing to roll back in production without --force.' . PHP_EOL);
+        // Rolling back drops tables and their data, so it never runs without an explicit --force.
+        if (!$force) {
+            fwrite(STDERR, 'Nothing was changed. Run again with --force to roll back.' . PHP_EOL);
             exit(1);
         }
     }

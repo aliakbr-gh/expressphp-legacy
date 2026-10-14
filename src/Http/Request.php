@@ -99,17 +99,21 @@ final class Request
     }
 
     /**
-     * A per-request identifier for correlating logs. A client value is accepted only when it is short and plain.
+     * A server-generated identifier for correlating logs. Clients cannot choose it, so they cannot
+     * reuse another request's id; their own id is available through clientRequestId().
      */
     public function requestId(): string
     {
-        if ($this->context->requestId === null) {
-            $supplied = $this->header('X-Request-ID');
-            $this->context->requestId = $supplied !== null && preg_match('/\A[A-Za-z0-9-]{8,64}\z/', $supplied) === 1
-                ? $supplied
-                : bin2hex(random_bytes(8));
-        }
-        return $this->context->requestId;
+        return $this->context->requestId ??= bin2hex(random_bytes(8));
+    }
+
+    /**
+     * The client's X-Request-ID when it is short and plain, for matching app-side reports to server logs.
+     */
+    public function clientRequestId(): ?string
+    {
+        $supplied = $this->header('X-Request-ID');
+        return $supplied !== null && preg_match('/\A[A-Za-z0-9-]{8,64}\z/', $supplied) === 1 ? $supplied : null;
     }
 
     public function text(): string
@@ -163,10 +167,11 @@ final class Request
         }
 
         if ($this->query !== []) {
-            throw new ValidationException(array_map(
-                fn(string|int $key): string => "Query parameter {$key} is not allowed for {$this->method} requests.",
-                array_keys($this->query),
-            ));
+            $errors = [];
+            foreach (array_keys($this->query) as $key) {
+                $errors[(string)$key] = ["Query parameter {$key} is not allowed for {$this->method} requests."];
+            }
+            throw new ValidationException($errors);
         }
 
         $input = $this->input();

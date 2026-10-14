@@ -37,6 +37,10 @@ final class DatabaseBackup
         if ($this->connection->getAttribute(PDO::ATTR_DRIVER_NAME) !== 'mysql') {
             throw new RuntimeException('Database backups support MySQL connections only.');
         }
+        // START TRANSACTION would silently commit the caller's open transaction.
+        if ($this->connection->inTransaction()) {
+            throw new RuntimeException('Database backups need a connection without an open transaction.');
+        }
 
         $this->ensureDirectory();
         $stamp = (new DateTimeImmutable('now', new DateTimeZone($this->timezone)))->format('Y-m-d-h-i-A');
@@ -84,6 +88,8 @@ final class DatabaseBackup
         }
         @chmod($sqlPath, 0600);
 
+        // A dump legitimately runs long, so any per-statement limit on this session is removed.
+        Database::setStatementTimeout($this->connection, 0);
         // One snapshot for every table, so related rows are captured at the same moment.
         $this->connection->exec('SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ');
         $this->connection->exec('START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY');

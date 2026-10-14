@@ -33,15 +33,19 @@ $config = [
         'retention_days' => 30,
     ],
 
-    // Per-IP request limits and temporary blocks.
+    // Request limits. The global limit counts each client: one IPv4 address or one IPv6 /64 network.
+    // It is generous because mobile carriers put many phones behind one IPv4 address; per-user limits
+    // come from the 'throttle:<max>,<seconds>' route middleware placed after 'auth'.
     'rate_limiter' => [
         'enabled' => true,
-        'max_requests' => 120,
+        'max_requests' => 600,
         'window_seconds' => 60,
-        'pause_minutes' => 5,
-        'max_violations' => 5,
-        'block_minutes' => 30,
-        'violation_decay_minutes' => 60,
+        'ipv6_prefix' => 64,
+        // Failed logins allowed per username before a 429.
+        'login_max_attempts' => 5,
+        'login_window_seconds' => 900,
+        // Unused counters are deleted after this long; manual IP blocks are kept until cleared.
+        'record_ttl_seconds' => 86400,
         'path' => dirname(__DIR__) . '/storage/rate-limiter',
         'except' => [
             '/api/v1/health/server',
@@ -67,6 +71,15 @@ $config = [
         'audience' => 'expressphp-api',
         'ttl' => 86400,
         'leeway' => 5,
+    ],
+
+    // Login sessions: one per user (a new login signs out the previous device). Each request that uses the
+    // token pushes its expiry back to session_idle_seconds from now, but never past session_lifetime_seconds
+    // after login. The expiry is written at most once per session_touch_seconds.
+    'auth' => [
+        'session_idle_seconds' => 604800,      // 7 days without use
+        'session_lifetime_seconds' => 7776000, // 90 days after login, however active
+        'session_touch_seconds' => 3600,
     ],
 
     // Bcrypt password hashing.
@@ -151,13 +164,16 @@ $config = [
         'connections' => [
             'mysql' => [
                 'driver' => 'mysql',
-                'host' => 'localhost',
-                'port' => 3306,
+                'host' => '127.0.0.1',
+                'port' => 3305,
                 'database' => 'expressphp_db',
                 'username' => 'root',
-                'password' => '',
+                'password' => 'root',
                 'charset' => 'utf8mb4',
+                // Seconds to wait for a connection.
                 'timeout' => 5,
+                // Longest single statement in milliseconds; 0 disables. Backups lift it for their own session.
+                'statement_timeout_ms' => 0,
             ],
 
             // Uncomment this profile and set its credentials to enable a second database.
@@ -182,6 +198,7 @@ $config = [
         'auth' => App\Middlewares\AuthMiddleware::class,
         'role' => App\Middlewares\RoleMiddleware::class,
         'permission' => App\Middlewares\PermissionMiddleware::class,
+        'throttle' => App\Middlewares\ThrottleMiddleware::class,
     ],
 
     // Browser access from explicitly allowed origins.
@@ -203,63 +220,74 @@ $config = [
     ],
 ];
 
-// Debug output follows the single debug switch above.
-$config['debug_dump']['enabled'] = $config['debug'];
+// Checks run inside a closure so that requiring this file defines no variables in the caller's scope;
+// CLI scripts and the front controller only receive the returned array.
+return (static function (array $config): array {
+    // Debug output follows the single debug switch above.
+    $config['debug_dump']['enabled'] = $config['debug'];
 
-try {
-    new DateTimeZone($config['timezone']);
-} catch (Exception) {
-    throw new RuntimeException('config/app.php: timezone must be a valid PHP time zone identifier.');
-}
-
-if ($config['env'] === 'production') {
-    if ($config['debug']) {
-        throw new RuntimeException('config/app.php: debug must be false in production.');
+    try {
+        new DateTimeZone($config['timezone']);
+    } catch (Exception) {
+        throw new RuntimeException('config/app.php: timezone must be a valid PHP time zone identifier.');
     }
-    if (!$config['force_https']) {
-        throw new RuntimeException('config/app.php: force_https must be true in production.');
+
+    if ($config['env'] === 'production') {
+        if ($config['debug']) {
+            throw new RuntimeException('config/app.php: debug must be false in production.');
+        }
+        if (!$config['force_https']) {
+            throw new RuntimeException('config/app.php: force_https must be true in production.');
+        }
     }
-}
 
-// 64 characters is the hex form of 32 random bytes; shorter values do not carry 32 bytes of entropy.
-$secrets = [$config['jwt']['secret'], ...array_values($config['jwt']['previous_keys'])];
-foreach ($secrets as $secret) {
-    $secret = trim((string)$secret);
-    if (strlen($secret) < 64 || in_array($secret, [
-        'expressphp-development-secret-change-this-before-production-2026',
-        'change-this-to-a-random-secret-with-at-least-32-bytes',
-    ], true)) {
-        throw new RuntimeException('config/app.php: jwt secrets must be at least 64 characters, such as bin2hex(random_bytes(32)).');
+    // 64 characters is the hex form of 32 random bytes; shorter values do not carry 32 bytes of entropy.
+    $secrets = [$config['jwt']['secret'], ...array_values($config['jwt']['previous_keys'])];
+    foreach ($secrets as $secret) {
+        $secret = trim((string)$secret);
+        if (strlen($secret) < 64 || in_array($secret, [
+            'expressphp-development-secret-change-this-before-production-2026',
+            'change-this-to-a-random-secret-with-at-least-32-bytes',
+        ], true)) {
+            throw new RuntimeException('config/app.php: jwt secrets must be at least 64 characters, such as bin2hex(random_bytes(32)).');
+        }
     }
-}
-$config['jwt']['secret'] = trim($config['jwt']['secret']);
+    $config['jwt']['secret'] = trim($config['jwt']['secret']);
 
-foreach ($config['trusted_proxies'] as $proxy) {
-    if (!is_string($proxy) || !ExpressPHP\Http\IPAddress::validRange($proxy)) {
-        throw new RuntimeException('config/app.php: trusted_proxies must contain IP addresses or CIDR ranges.');
+    $idle = $config['auth']['session_idle_seconds'];
+    $lifetime = $config['auth']['session_lifetime_seconds'];
+    if (!is_int($idle) || !is_int($lifetime) || !is_int($config['auth']['session_touch_seconds'])
+        || $idle < 60 || $lifetime < $idle || $config['auth']['session_touch_seconds'] < 0) {
+        throw new RuntimeException('config/app.php: auth session times must be integers with 60 <= idle <= lifetime.');
     }
-}
 
-$origins = $config['cors']['origins'];
-if ($config['cors']['enabled'] && ($origins === [] || array_filter(
-    $origins,
-    static fn(string $origin): bool => in_array(trim($origin), ['', '*'], true),
-) !== [])) {
-    throw new RuntimeException('config/app.php: cors.origins must list explicit origins when CORS is enabled.');
-}
-
-$connection = $config['databases']['connections'][$config['databases']['default']] ?? null;
-if (!is_array($connection)) {
-    throw new RuntimeException('config/app.php: the default database connection must be configured.');
-}
-$required = ['host', 'database', 'username'];
-if ($config['env'] === 'production') {
-    $required[] = 'password';
-}
-foreach ($required as $key) {
-    if (trim((string)($connection[$key] ?? '')) === '') {
-        throw new RuntimeException('config/app.php: the default database requires ' . $key . '.');
+    foreach ($config['trusted_proxies'] as $proxy) {
+        if (!is_string($proxy) || !ExpressPHP\Http\IPAddress::validRange($proxy)) {
+            throw new RuntimeException('config/app.php: trusted_proxies must contain IP addresses or CIDR ranges.');
+        }
     }
-}
 
-return $config;
+    $origins = $config['cors']['origins'];
+    if ($config['cors']['enabled'] && ($origins === [] || array_filter(
+        $origins,
+        static fn(string $origin): bool => in_array(trim($origin), ['', '*'], true),
+    ) !== [])) {
+        throw new RuntimeException('config/app.php: cors.origins must list explicit origins when CORS is enabled.');
+    }
+
+    $connection = $config['databases']['connections'][$config['databases']['default']] ?? null;
+    if (!is_array($connection)) {
+        throw new RuntimeException('config/app.php: the default database connection must be configured.');
+    }
+    $required = ['host', 'database', 'username'];
+    if ($config['env'] === 'production') {
+        $required[] = 'password';
+    }
+    foreach ($required as $key) {
+        if (trim((string)($connection[$key] ?? '')) === '') {
+            throw new RuntimeException('config/app.php: the default database requires ' . $key . '.');
+        }
+    }
+
+    return $config;
+})($config);

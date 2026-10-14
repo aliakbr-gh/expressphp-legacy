@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ExpressPHP\Auth;
 
+use ExpressPHP\Validation\ValidationException;
 use RuntimeException;
 
 final class Password
@@ -12,7 +13,7 @@ final class Password
 
     public static function configure(array $config): void
     {
-        $cost = (int)($config['bcrypt_cost'] ?? 10);
+        $cost = (int)($config['bcrypt_cost'] ?? 12);
         if ($cost < 4 || $cost > 31) {
             throw new RuntimeException('Password bcrypt cost must be between 4 and 31.');
         }
@@ -20,19 +21,26 @@ final class Password
         self::$bcryptCost = $cost;
     }
 
-    public static function hash(string $password): string
+    /**
+     * Bcrypt cannot hash NUL characters, so such passwords are rejected as invalid input (HTTP 422).
+     */
+    public static function hash(#[\SensitiveParameter] string $password): string
     {
+        if (str_contains($password, "\0")) {
+            throw new ValidationException(['password' => ['The password must not contain null characters.']]);
+        }
+
         return password_hash($password, PASSWORD_BCRYPT, [
             'cost' => self::$bcryptCost,
         ]);
     }
 
-    public static function verify(string $password, string $hash): bool
+    public static function verify(#[\SensitiveParameter] string $password, #[\SensitiveParameter] string $hash): bool
     {
-        return password_verify($password, $hash);
+        return !str_contains($password, "\0") && password_verify($password, $hash);
     }
 
-    public static function needsRehash(string $hash): bool
+    public static function needsRehash(#[\SensitiveParameter] string $hash): bool
     {
         return password_needs_rehash($hash, PASSWORD_BCRYPT, [
             'cost' => self::$bcryptCost,

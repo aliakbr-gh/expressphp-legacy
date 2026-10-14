@@ -28,7 +28,7 @@ return static function (Application $app): void {
             $router->get('/database', [HealthController::class, 'database']);
         });
 
-        $router->group('/roles', ['auth'], static function (Router $router): void {
+        $router->group('/roles', ['auth', 'throttle:120,60'], static function (Router $router): void {
             $router->get('/', [RoleController::class, 'index'], ['permission:roles.view']);
             $router->post('/', [RoleController::class, 'store'], ['permission:roles.create']);
             $router->get('/{id}', [RoleController::class, 'show'], ['permission:roles.view']);
@@ -46,7 +46,7 @@ return static function (Application $app): void {
             ]);
         });
 
-        $router->group('/permissions', ['auth'], static function (Router $router): void {
+        $router->group('/permissions', ['auth', 'throttle:120,60'], static function (Router $router): void {
             $router->get('/', [PermissionController::class, 'index'], ['permission:permissions.view']);
             $router->post('/', [PermissionController::class, 'store'], ['permission:permissions.create']);
             $router->get('/{id}', [PermissionController::class, 'show'], ['permission:permissions.view']);
@@ -57,7 +57,7 @@ return static function (Application $app): void {
             $router->get('/{id}/roles', [PermissionController::class, 'roles'], ['permission:permissions.view']);
         });
 
-        $router->group('/users', ['auth'], static function (Router $router): void {
+        $router->group('/users', ['auth', 'throttle:120,60'], static function (Router $router): void {
             $router->get('/', [UserController::class, 'index'], ['permission:users.view']);
             $router->post('/', [UserController::class, 'store'], [
                 'permission:users.create,users.roles.assign',
@@ -70,7 +70,7 @@ return static function (Application $app): void {
             $router->get('/{id}/permissions', [UserController::class, 'permissions'], ['permission:users.view']);
         });
 
-        $router->group('/activity-logs', ['auth'], static function (Router $router): void {
+        $router->group('/activity-logs', ['auth', 'throttle:120,60'], static function (Router $router): void {
             $router->get('/', [ActivityLogController::class, 'index'], ['permission:activity-logs.view']);
             $router->post('/', [ActivityLogController::class, 'store'], ['permission:activity-logs.create']);
             $router->get('/{id}', [ActivityLogController::class, 'show'], ['permission:activity-logs.view']);
@@ -78,10 +78,11 @@ return static function (Application $app): void {
 
         $router->get('/server-logs', [ServerLogController::class, 'index'], [
             'auth',
+            'throttle:120,60',
             'permission:server-logs.view',
         ]);
 
-        $router->group('/rate-limits', ['auth'], static function (Router $router): void {
+        $router->group('/rate-limits', ['auth', 'throttle:120,60'], static function (Router $router): void {
             $router->get('/blocked', [RateLimitController::class, 'blocked'], [
                 'permission:rate-limits.view',
             ]);
@@ -96,7 +97,7 @@ return static function (Application $app): void {
             ]);
         });
 
-        $router->group('/emails', ['auth'], static function (Router $router): void {
+        $router->group('/emails', ['auth', 'throttle:120,60'], static function (Router $router): void {
             $router->get('/', [EmailController::class, 'index'], ['permission:emails.view']);
             $router->post('/send', [EmailController::class, 'send'], ['permission:emails.send']);
             $router->get('/{id}', [EmailController::class, 'show'], ['permission:emails.view']);
@@ -104,20 +105,21 @@ return static function (Application $app): void {
 
         $router->post('/files/upload', [FileController::class, 'upload'], [
             'auth',
+            'throttle:120,60',
             'permission:files.upload',
         ]);
 
         $router->get('/database-backups/download', [DatabaseBackupController::class, 'download'], [
             'auth',
+            'throttle:120,60',
             'permission:database-backups.download',
         ]);
 
         $router->group('/auth', static function (Router $router): void {
             $router->post('/register', [AuthController::class, 'register']);
             $router->post('/login', [AuthController::class, 'login']);
-            $router->get('/me', [AuthController::class, 'me'], ['auth']);
-            $router->post('/refresh', [AuthController::class, 'refresh'], ['auth']);
-            $router->post('/logout', [AuthController::class, 'logout'], ['auth']);
+            $router->get('/me', [AuthController::class, 'me'], ['auth', 'throttle:120,60']);
+            $router->post('/logout', [AuthController::class, 'logout'], ['auth', 'throttle:120,60']);
         });
     });
 };

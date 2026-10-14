@@ -18,6 +18,10 @@ if (!filter_var(ini_get('allow_url_fopen'), FILTER_VALIDATE_BOOL)) {
     exit(1);
 }
 
+// Real file names matter: a server that blocks directory listings can still serve a known file.
+$today = gmdate('Y-m-d');
+$yesterday = gmdate('Y-m-d', time() - 86400);
+
 $paths = [
     '/.git/HEAD',
     '/.git/config',
@@ -30,11 +34,17 @@ $paths = [
     '/migrations/',
     '/cli/migrate.php',
     '/storage/logs/',
+    "/storage/logs/{$today}.log",
+    "/storage/logs/{$yesterday}.log",
+    "/storage/logs/errors-{$today}.log",
     '/storage/backups/',
+    '/storage/backups/.gitignore',
     '/storage/uploads/',
+    '/storage/uploads/.gitignore',
     '/storage/rate-limiter/',
+    '/tests/run.php',
     '/README.md',
-    '/CLAUDE_QA_REVIEW.md',
+    '/CLAUDE_QA_REVIEW_2.md',
 ];
 
 $exposed = 0;

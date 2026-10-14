@@ -79,7 +79,13 @@ php -l path/to/file.php
 Lint all project PHP:
 
 ```bash
-find app cli src config migrations public routes -name '*.php' -print0 | xargs -0 -n1 php -l
+find app cli src config migrations public routes tests -name '*.php' -print0 | xargs -0 -n1 php -l
+```
+
+Run the framework regression tests:
+
+```bash
+php tests/run.php
 ```
 
 ## Working practices

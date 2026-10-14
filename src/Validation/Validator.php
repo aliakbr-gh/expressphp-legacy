@@ -14,6 +14,8 @@ final class Validator
     // Upper bounds on work for one request: items under a single wildcard and fields expanded in total.
     private const MAX_WILDCARD_ITEMS = 1000;
     private const MAX_EXPANDED_FIELDS = 10000;
+    // Error messages returned for one request; more are summarized so a large body cannot amplify the response.
+    private const MAX_ERRORS = 50;
 
     public static function validate(
         array $input,
@@ -26,7 +28,9 @@ final class Validator
         uksort($definitions, static fn(string|int $left, string|int $right): int
             => substr_count((string)$left, '.') <=> substr_count((string)$right, '.'));
         $objectPaths = array_fill_keys($JSONObjectPaths, true);
-        $errors = self::unknownKeyErrors($input, array_keys($definitions));
+        $errors = [];
+        $visited = 0;
+        self::unknownKeyErrors($input, array_keys($definitions), '', $errors, $visited);
         $fields = [];
         $failed = [];
         $distinctValues = [];
@@ -91,7 +95,7 @@ final class Validator
         }
 
         if ($errors !== []) {
-            throw new ValidationException($errors);
+            throw new ValidationException(self::limitErrors($errors));
         }
 
         // Write parents first so child normalization is independent of rule order.
@@ -559,10 +563,10 @@ final class Validator
                 return;
             }
             if (count($input) > self::MAX_WILDCARD_ITEMS) {
-                throw new ValidationException([
+                throw new ValidationException([$prefix => [
                     'The ' . str_replace(['.', '_'], ' ', $prefix) . ' field may not contain more than '
                     . self::MAX_WILDCARD_ITEMS . ' items.',
-                ]);
+                ]]);
             }
             foreach ($input as $key => $value) {
                 self::expandField($value, $segments, $prefix === '' ? (string)$key : $prefix . '.' . $key, $paths);
@@ -590,7 +594,7 @@ final class Validator
                 $parameters[0] ?? '', $index, ctype_digit($index) ? (string)((int)$index + 1) : $index],
             $template,
         );
-        $errors[] = $message;
+        $errors[$field][] = $message;
     }
 
     private static function defaultMessage(string $rule): string
@@ -665,13 +669,44 @@ final class Validator
         $target = $value;
     }
 
-    private static function unknownKeyErrors(array $input, array $rules, string $prefix = ''): array
+    /**
+     * Keeps errors for at most MAX_ERRORS fields so a large invalid body cannot amplify the response.
+     */
+    private static function limitErrors(array $errors): array
     {
-        $errors = [];
+        if (count($errors) <= self::MAX_ERRORS) {
+            return $errors;
+        }
+        $limited = array_slice($errors, 0, self::MAX_ERRORS, true);
+        $limited[ValidationException::REQUEST_FIELD][] = 'Additional errors were omitted.';
+        return $limited;
+    }
+
+    /**
+     * Reports keys that no rule declares. Errors are appended by reference and the walk stops early,
+     * so the cost stays linear in the input and bounded even when every key is unknown.
+     */
+    private static function unknownKeyErrors(array $input, array $rules, string $prefix, array &$errors, int &$visited): void
+    {
+        if (count($input) > self::MAX_WILDCARD_ITEMS) {
+            $errors[$prefix === '' ? ValidationException::REQUEST_FIELD : $prefix][] =
+                ($prefix === '' ? 'The request' : 'The ' . str_replace(['.', '_'], ' ', $prefix) . ' field')
+                . ' may not contain more than ' . self::MAX_WILDCARD_ITEMS . ' items.';
+            return;
+        }
+
         foreach ($input as $key => $value) {
+            // One error past the limit is kept so limitErrors() can report that more were omitted.
+            if (count($errors) > self::MAX_ERRORS) {
+                return;
+            }
+            if (++$visited > self::MAX_EXPANDED_FIELDS) {
+                throw new ValidationException(['The request contains too many fields.']);
+            }
+
             $path = $prefix === '' ? (string)$key : $prefix . '.' . $key;
             if (str_contains((string)$key, '.')) {
-                $errors[] = "Invalid key {$path} in request.";
+                $errors[$path][] = "Invalid key {$path} in request.";
                 continue;
             }
             $segments = explode('.', $path);
@@ -695,16 +730,15 @@ final class Validator
                 }
             }
             if (!$exact && !$hasChildren) {
-                $errors[] = "Invalid key {$path} in request.";
+                $errors[$path][] = "Invalid key {$path} in request.";
             } elseif ($hasChildren) {
                 if (is_array($value)) {
-                    $errors = [...$errors, ...self::unknownKeyErrors($value, $rules, $path)];
+                    self::unknownKeyErrors($value, $rules, $path, $errors, $visited);
                 } elseif ($value !== null || !$exact) {
-                    $errors[] = "The {$path} field must be an array or object.";
+                    $errors[$path][] = "The {$path} field must be an array or object.";
                 }
             }
         }
-        return $errors;
     }
 
     private static function databaseValueAllowed(mixed $value): bool

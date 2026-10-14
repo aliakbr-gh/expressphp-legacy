@@ -31,6 +31,29 @@ final class IPAddress
         return $normalized === false ? null : $normalized;
     }
 
+    /**
+     * Returns the network an address belongs to, such as "2001:db8:1:2::/64", or null when it is invalid.
+     */
+    public static function network(string $address, int $prefix): ?string
+    {
+        $normalized = self::normalize($address);
+        if ($normalized === null) {
+            return null;
+        }
+
+        $packed = (string)inet_pton($normalized);
+        $prefix = max(0, min($prefix, strlen($packed) * 8));
+        $bytes = intdiv($prefix, 8);
+        $masked = substr($packed, 0, $bytes);
+        if ($bytes < strlen($packed)) {
+            $remainder = $prefix % 8;
+            $masked .= chr(ord($packed[$bytes]) & ((0xff << (8 - $remainder)) & 0xff));
+            $masked .= str_repeat("\0", strlen($packed) - $bytes - 1);
+        }
+
+        return inet_ntop($masked) . '/' . $prefix;
+    }
+
     public static function validRange(string $range): bool
     {
         return self::parseRange($range) !== null;

@@ -9,6 +9,9 @@ defined('APP_STARTED_AT') || define('APP_STARTED_AT', microtime(true));
 // All stored and returned times are UTC; config "timezone" only names local log files and backups.
 date_default_timezone_set('UTC');
 
+// Exception traces must not capture argument values such as passwords and tokens.
+ini_set('zend.exception_ignore_args', '1');
+
 spl_autoload_register(static function (string $class) use ($root): void {
     $namespaces = [
         'App\\' => $root . '/app/',

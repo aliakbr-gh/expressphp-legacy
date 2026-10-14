@@ -9,6 +9,9 @@ use Throwable;
 
 final class SMTPMailer
 {
+    // TLS 1.0 and 1.1 are deprecated (RFC 8996) and are never negotiated.
+    private const TLS_METHODS = STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT | STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT;
+
     private static array $config = [];
 
     public static function configure(array $config): void
@@ -43,7 +46,7 @@ final class SMTPMailer
 
             if ($config['encryption'] === 'tls') {
                 $this->command($socket, 'STARTTLS', [220]);
-                if (!stream_socket_enable_crypto($socket, true, STREAM_CRYPTO_METHOD_TLS_CLIENT)) {
+                if (!stream_socket_enable_crypto($socket, true, self::TLS_METHODS)) {
                     throw new MailException('Unable to start TLS encryption.');
                 }
                 $this->command($socket, 'EHLO ' . $hostname, [250]);
@@ -126,12 +129,19 @@ final class SMTPMailer
     private function connect(array $config): mixed
     {
         $scheme = $config['encryption'] === 'ssl' ? 'ssl' : 'tcp';
+        $context = stream_context_create(['ssl' => [
+            'crypto_method' => self::TLS_METHODS,
+            'verify_peer' => true,
+            'verify_peer_name' => true,
+            'peer_name' => $config['host'],
+        ]]);
         $socket = @stream_socket_client(
             $scheme . '://' . $config['host'] . ':' . $config['port'],
             $errorCode,
             $errorMessage,
             $config['timeout'],
             STREAM_CLIENT_CONNECT,
+            $context,
         );
         if ($socket === false) {
             throw new MailException("Could not connect to SMTP server: {$errorMessage} ({$errorCode}).");
@@ -140,7 +150,7 @@ final class SMTPMailer
         return $socket;
     }
 
-    private function command(mixed $socket, string $command, array $expected): string
+    private function command(mixed $socket, #[\SensitiveParameter] string $command, array $expected): string
     {
         $this->write($socket, $command . "\r\n");
         return $this->expect($socket, $expected);
@@ -149,7 +159,7 @@ final class SMTPMailer
     /**
      * TLS streams can accept fewer bytes than offered, so write until everything has been sent.
      */
-    private function write(mixed $socket, string $data): void
+    private function write(mixed $socket, #[\SensitiveParameter] string $data): void
     {
         $length = strlen($data);
         $written = 0;

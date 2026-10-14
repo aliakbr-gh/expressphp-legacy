@@ -44,6 +44,7 @@ final class RequestLogger
             $entry = [
                 'timestamp' => $now->format(DATE_ATOM),
                 'request_id' => $request->requestId(),
+                'client_request_id' => $request->clientRequestId(),
                 'method' => $request->method(),
                 'path' => $request->path(),
                 'query' => Redactor::redact($request->query()),
@@ -61,10 +62,15 @@ final class RequestLogger
             ];
 
             $file = $directory . '/' . $now->format('Y-m-d') . '.log';
-            if (!is_file($file)) {
+            $new = !is_file($file);
+            if ($new) {
                 LogFiles::prune($directory, (int)(self::$config['retention_days'] ?? 0), $now);
             }
             file_put_contents($file, json_encode($entry, self::JSON_FLAGS) . PHP_EOL, FILE_APPEND | LOCK_EX);
+            if ($new) {
+                // Logs hold IPs and request data; other local accounts must not read them.
+                @chmod($file, 0640);
+            }
         } catch (Throwable) {
             // Request logging is best-effort and must never break the application.
         }
@@ -112,6 +118,10 @@ final class RequestLogger
     private static function input(Request $request): mixed
     {
         $limit = max(0, (int)(self::$config['max_input_bytes'] ?? 4096));
+        // Check the raw size first so an oversized body is never decoded just to be omitted.
+        if ($request->text() !== '' && ($limit === 0 || strlen($request->text()) > $limit)) {
+            return '[omitted: payload too large]';
+        }
 
         try {
             $input = $request->input();

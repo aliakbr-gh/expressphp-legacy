@@ -11,7 +11,8 @@ final class LogFiles
     private const CHUNK_BYTES = 65536;
 
     /**
-     * Deletes dated log files (name ending in Y-m-d.log) older than the retention window.
+     * Deletes this framework's dated logs (Y-m-d.log and errors-Y-m-d.log) older than the retention window.
+     * Other files in the directory are never touched, even when they carry a date in their name.
      */
     public static function prune(string $directory, int $retentionDays, DateTimeImmutable $today): void
     {
@@ -21,7 +22,7 @@ final class LogFiles
 
         $cutoff = $today->modify('-' . $retentionDays . ' days')->format('Y-m-d');
         foreach (glob(rtrim($directory, '/') . '/*.log') ?: [] as $file) {
-            if (preg_match('/(\d{4}-\d{2}-\d{2})\.log\z/', basename($file), $match) === 1 && $match[1] < $cutoff) {
+            if (preg_match('/\A(?:errors-)?(\d{4}-\d{2}-\d{2})\.log\z/', basename($file), $match) === 1 && $match[1] < $cutoff) {
                 @unlink($file);
             }
         }

@@ -10,11 +10,11 @@ See [PROJECT.md](PROJECT.md) for a simple guide to every file and how requests m
 ## Features
 
 - Versioned routing and middleware
-- JWT authentication and token invalidation
+- Database-backed login sessions (one device per user, sliding expiry)
 - Roles and permissions
 - Validation and pagination
 - PDO models and migrations
-- Rate limiting and permanent IP blocking
+- Per-client, per-user, and per-username rate limits, plus manual IP blocking
 - Activity logs and daily request logs
 - Server and database health checks
 - SMTP and Gmail email
@@ -158,7 +158,26 @@ php cli/make migration create_products_table
 return $response->success($data, 'Request successful');
 return $response->success($data, 'Resource created', 201);
 return $response->error('Resource not found', 404);
+return $response->error('Invalid Data', 422, ['email' => ['The email field is required.']]);
 ```
+
+Every error response has the same shape, so typed mobile decoders never see a field change type:
+
+```json
+{
+  "success": false,
+  "message": "Invalid Data",
+  "errors": {
+    "name": ["The name field is required."],
+    "email": ["The email field must contain a valid email address."]
+  },
+  "data": null
+}
+```
+
+`message` is always a string, and `errors` is always an object (`{}` when there are no field errors). Validation failures
+use the message `Invalid Data`. Errors about the request as a whole, such as a body sent with `GET`, appear under
+`_request`. At most 50 fields are reported; when there are more, `_request` ends with `Additional errors were omitted.`
 
 Render a PHP template with controller data:
 
@@ -185,6 +204,11 @@ Templates receive each data key as a variable, plus the original `$data` array a
 
 Use `$escape()` for values displayed in HTML text or quoted attributes. Templates contain trusted PHP code; passing data
 does not automatically escape it. The names `data`, `escape`, PHP superglobals, and names starting with `__` are reserved.
+
+Templates are strict: a PHP warning, such as an undefined variable, fails the render with a 500 instead of printing broken
+HTML. Give optional values a default in the template, for example `$cars ?? []`. View responses carry
+`Content-Security-Policy: default-src 'self'`, so inline `<script>` and `style` are blocked; serve assets as files, or
+call `->header('Content-Security-Policy', ...)` after `view()` to set your own policy.
 
 ```php
 $data = $request->validate([
@@ -275,7 +299,8 @@ return 413. One wildcard may hold at most 1,000 items, and items under an invali
 Unknown fields are rejected. Invalid request values return HTTP 422. Malformed or unsupported rule definitions are
 programming errors and fail before input validation.
 
-Every response carries `X-Request-ID`, which matches the request and error logs. A known path with the wrong method
+Every response carries a server-generated `X-Request-ID`, which matches the request and error logs; a client's own
+`X-Request-ID` (8–64 letters, digits, or dashes) is logged as `client_request_id`. A known path with the wrong method
 returns 405 with an `Allow` header; `HEAD` runs the `GET` route without a body. Times are stored and returned in UTC as
 ISO 8601 (`2026-10-13T08:15:00Z`); `timezone` only names daily log files and backup files.
 
@@ -296,28 +321,57 @@ GET /api/v1/users?limit=20&offset=0
 
 ## Authentication and RBAC
 
-Access tokens last `jwt.ttl` seconds (default 86400). The IP limiter defaults to 120 requests per 60 seconds. Tune the
-`rate_limiter` array in `config/app.php` for a chatty mobile client.
-
 ```text
 POST /api/v1/auth/register
 POST /api/v1/auth/login
 GET  /api/v1/auth/me
-POST /api/v1/auth/refresh
 POST /api/v1/auth/logout
 ```
 
-Send protected requests with:
+Login returns a random session token. Send it with every protected request:
 
 ```http
 Authorization: Bearer <token>
 ```
 
-Refresh creates a replacement token and invalidates previous tokens for that user. Logout invalidates all active tokens
-through `session_version`.
+```json
+{
+  "user": { "id": 1, "username": "owner", "role_slug": "super-admin", "permissions": [] },
+  "token": "64 hexadecimal characters",
+  "token_type": "Bearer",
+  "expires_at": "2026-10-21T12:00:00Z",
+  "absolute_expires_at": "2027-01-12T12:00:00Z"
+}
+```
 
-Tokens carry a `kid`. To rotate the signing key without logging everyone out, move the current `kid` and `secret` into
-`jwt.previous_keys`, set a new `kid` and `secret`, and remove the old entry after `jwt.ttl` seconds.
+Sessions are stored in `user_sessions`, which keeps only a SHA-256 hash of each token:
+
+- **One device per user.** Logging in replaces the previous session, so the other device gets 401 on its next request.
+- **Sliding expiry.** A session ends after `auth.session_idle_seconds` without use (7 days). Each use extends it again,
+  but never past `auth.session_lifetime_seconds` after login (90 days). The expiry is written at most once per
+  `auth.session_touch_seconds` (1 hour), not on every request.
+- **Ending a session.** Logout deletes the session, and so do a password change or deactivation by an administrator.
+  Deleting a user deletes their session. A role change applies immediately without signing out, because permissions
+  are loaded on every request.
+- **Expired sessions** are rejected and deleted when presented, and all expired rows are removed at each login.
+
+There is no refresh endpoint. When any request returns 401, the app shows the login screen.
+
+The `JWT` class remains available for other signed tokens. Tokens carry a `kid`: to rotate the signing key, move the
+current `kid` and `secret` into `jwt.previous_keys` and set a new `kid` and `secret`.
+
+### Rate limits
+
+- **Every client:** `rate_limiter.max_requests` per `window_seconds` (600 per minute) for each IPv4 address or IPv6 /64
+  network. This is generous because mobile carriers put many phones behind one IPv4 address.
+- **Each signed-in user:** add `throttle:<max>,<seconds>` after `auth`, for example `['auth', 'throttle:120,60']`.
+- **Login:** `login_max_attempts` failed logins per username within `login_window_seconds` (5 per 15 minutes). A
+  successful login resets the count.
+
+A limited request gets 429 with `Retry-After` and `data.retry_after` in seconds. Manually blocked addresses get 403
+until cleared. Unused counters are deleted after `record_ttl_seconds`, automatically and with
+`php cli/rate-limit prune`. Counters are stored per server; with several servers behind a load balancer, each keeps
+its own.
 
 ```php
 ['auth', 'permission:reports.view']
@@ -343,7 +397,11 @@ Block and clear accept `{"ip":"192.0.2.10"}`. These match the `php cli/rate-limi
 Daily JSON request logs are stored under `storage/logs/Y-m-d.log`, and unexpected exceptions under
 `storage/logs/errors-Y-m-d.log`. Keys containing words such as password, token, secret, or cookie, and keys such as
 `otp` and `pin`, are redacted; the raw URL is not logged. Files older than `logging.retention_days` are deleted.
-PHP errors are never displayed in responses.
+PHP errors are never displayed in responses, and exception traces never record argument values. Log files are created
+with mode `0640` and limiter records with `0660`; for files created before this change, run `chmod -R o-rwx storage`.
+
+Set `statement_timeout_ms` on a MySQL connection to stop any single statement after that many milliseconds; MySQL applies
+it to `SELECT` statements and MariaDB to all statements. Database backups remove the limit for their own session.
 
 ## Database backups
 
@@ -414,14 +472,17 @@ file contents, and the response is a sandboxed attachment unless `inline: true` 
 ```bash
 php cli/migrate.php status
 php cli/migrate.php migrate
-php cli/migrate.php rollback          # prints the plan; production also requires --force
+php cli/migrate.php rollback --force  # without --force it only prints what would be rolled back
 
 php cli/check-deploy https://api.example.com
+
+php tests/run.php                     # framework regression tests; needs no database server
 
 php cli/rate-limit status 192.0.2.10
 php cli/rate-limit block 192.0.2.10
 php cli/rate-limit clear 192.0.2.10
 php cli/rate-limit blocked
+php cli/rate-limit prune
 ```
 
 ## Production checklist

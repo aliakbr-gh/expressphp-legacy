@@ -34,7 +34,8 @@ final class Debugger
         if (!$enabled) {
             self::emit($status, [
                 'success' => false,
-                'message' => ['Internal Server Error'],
+                'message' => 'Internal Server Error',
+                'errors' => (object)[],
                 'data' => null,
             ]);
         }
@@ -106,7 +107,7 @@ final class Debugger
                 JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE,
             );
         } catch (JsonException $exception) {
-            echo '{"success":false,"message":["Debug dump could not be encoded"],"data":null}';
+            echo '{"success":false,"message":"Debug dump could not be encoded","errors":{},"data":null}';
         }
         exit;
     }

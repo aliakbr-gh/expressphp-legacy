@@ -4,41 +4,41 @@ declare(strict_types=1);
 
 namespace App\Middlewares;
 
-use ExpressPHP\Auth\JWT;
-use ExpressPHP\Auth\JWTException;
+use App\Models\User;
+use App\Models\UserSession;
+use ExpressPHP\Core\Config;
 use ExpressPHP\Http\Request;
 use ExpressPHP\Http\Response;
-use App\Models\User;
 
 final class AuthMiddleware
 {
-    public function __construct(private readonly User $users = new User())
-    {
+    private readonly int $idleSeconds;
+    private readonly int $touchSeconds;
+
+    public function __construct(
+        Config                       $config,
+        private readonly User        $users = new User(),
+        private readonly UserSession $sessions = new UserSession(),
+    ) {
+        $this->idleSeconds = (int)$config->get('auth.session_idle_seconds', 604800);
+        $this->touchSeconds = (int)$config->get('auth.session_touch_seconds', 3600);
     }
 
     public function __invoke(Request $request, Response $response): ?Response
     {
         $token = $request->bearerToken();
-        if ($token === null) {
+        $session = $token === null ? null : $this->sessions->findActive($token);
+        if ($session === null) {
             return $this->unauthorized($response);
         }
 
-        try {
-            $claims = JWT::decode($token);
-        } catch (JWTException) {
+        $user = $this->users->findDetailed($session['user_id']);
+        if ($user === null || !(bool)($user['is_active'] ?? false)) {
+            $this->sessions->endForUser($session['user_id']);
             return $this->unauthorized($response);
         }
 
-        $user = $this->users->findDetailed((string)$claims['sub']);
-        if (
-            $user === null
-            || !(bool)($user['is_active'] ?? false)
-            || !isset($claims['sv'])
-            || (int)$claims['sv'] !== (int)$user['session_version']
-        ) {
-            return $this->unauthorized($response);
-        }
-
+        $this->sessions->touch($session, $this->idleSeconds, $this->touchSeconds);
         $request->setUser($user);
         return null;
     }
@@ -47,6 +47,6 @@ final class AuthMiddleware
     {
         return $response
             ->header('WWW-Authenticate', 'Bearer realm="ExpressPHP API"')
-            ->error(['Invalid or expired token.'], 401);
+            ->error('Invalid or expired token.', 401);
     }
 }

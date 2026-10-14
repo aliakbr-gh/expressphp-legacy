@@ -34,6 +34,7 @@ final class ErrorLogger
             $entry = [
                 'timestamp' => $now->format(DATE_ATOM),
                 'request_id' => $request?->requestId(),
+                'client_request_id' => $request?->clientRequestId(),
                 'method' => $request?->method(),
                 'path' => $request?->path(),
                 'user_id' => $request?->user()['id'] ?? null,
@@ -43,7 +44,8 @@ final class ErrorLogger
             ];
 
             $file = $directory . '/errors-' . $now->format('Y-m-d') . '.log';
-            if (!is_file($file)) {
+            $new = !is_file($file);
+            if ($new) {
                 LogFiles::prune($directory, (int)(self::$config['retention_days'] ?? 0), $now);
             }
             file_put_contents(
@@ -51,6 +53,9 @@ final class ErrorLogger
                 json_encode($entry, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE) . PHP_EOL,
                 FILE_APPEND | LOCK_EX,
             );
+            if ($new) {
+                @chmod($file, 0640);
+            }
         } catch (Throwable) {
             // Error logging is best-effort; the original failure is already being handled.
         }

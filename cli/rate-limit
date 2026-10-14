@@ -25,8 +25,9 @@ try {
         'block' => $ip !== null ? $limiter->block($ip) : throw new RuntimeException('An IP address is required.'),
         'clear' => $ip !== null ? $limiter->clear($ip) : throw new RuntimeException('An IP address is required.'),
         'blocked' => $limiter->blocked(),
+        'prune' => ['removed' => $limiter->prune()],
         default => throw new RuntimeException(
-            'Use: status <ip>, block <ip>, clear <ip>, or blocked.',
+            'Use: status <ip>, block <ip>, clear <ip>, blocked, or prune.',
         ),
     };
 

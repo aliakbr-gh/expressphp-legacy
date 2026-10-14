@@ -16,6 +16,7 @@ This guide explains every maintained project file. Files created while the API r
 | `cli/` | Commands you run from the terminal. |
 | `public/` | The HTTP entry point and its Apache rules. |
 | `storage/` | Private files created while the application runs. |
+| `tests/` | Framework regression tests, run with `php tests/run.php`. |
 
 A **controller** handles an API request. A **model** reads or saves application data. **Middleware** checks a request before the controller runs. A **route** connects an HTTP method and URL to a controller method.
 
@@ -24,7 +25,7 @@ A **controller** handles an API request. A **model** reads or saves application 
 | File | What it contains and does |
 |---|---|
 | `index.php` | The entry point when the whole project is the website's root. It passes execution to `public/index.php`. |
-| `.htaccess` | Apache rules for requests entering the project root. Sends URLs to `index.php`, preserves authorization headers, disables directory browsing, and blocks direct access to source code, settings, private storage, and project documents. |
+| `.htaccess` | Apache rules for requests entering the project root. Sends URLs to `index.php`, preserves authorization headers, disables directory browsing, and blocks direct access to source code, settings, private storage, tests, and project documents. |
 | `.gitignore` | Tells Git to ignore generated logs, limiter records, uploads, and backups. It also keeps a legacy `.env` file out of Git if one is created; the application no longer loads it. |
 | `README.md` | Installation instructions, usage examples, API features, terminal commands, and production setup notes. |
 | `PROJECT.md` | This file: a simple map of the project's files and how they work together. |
@@ -71,7 +72,8 @@ Middleware can stop a request before its controller runs. Authentication means c
 
 | File | What it contains and does |
 |---|---|
-| `app/Middlewares/AuthMiddleware.php` | Checks the bearer token, loads its user, and rejects invalid tokens, inactive users, or revoked sessions. Adds the verified user to the request. |
+| `app/Middlewares/AuthMiddleware.php` | Looks up the bearer token's session, rejects missing, expired, or replaced sessions and inactive users, extends the session's sliding expiry, and adds the verified user to the request. |
+| `app/Middlewares/ThrottleMiddleware.php` | Limits requests per signed-in user (or per client for guests) through the `throttle:<max>,<seconds>` alias. Place it after `auth`. |
 | `app/Middlewares/PermissionMiddleware.php` | Requires the signed-in user to have every permission named by the route. The `super-admin` role passes this check without individual permission grants. |
 | `app/Middlewares/RoleMiddleware.php` | Allows only the role identifiers listed by the route, such as `admin`. Available through the `role` alias, although the current routes use authentication and permission checks. |
 
@@ -86,11 +88,12 @@ Most models use a database table. `ServerLog.php` reads files instead.
 | `app/Models/Permission.php` | Works with the `permissions` table, finds a permission by its slug, and lists the roles that have it. A slug is its short identifier, such as `users.view`. |
 | `app/Models/Role.php` | Loads roles, their permissions, and their assigned-user counts. Adds, removes, or replaces permission assignments; replacing the list uses a database transaction. |
 | `app/Models/ServerLog.php` | Reads dated request log files and returns the newest entries first. Supplies the file contents and total count needed for pagination. |
-| `app/Models/User.php` | Queries users, checks passwords, loads roles and permissions, and removes password hashes from detailed user results. Chooses the registration role and updates the session version used to revoke tokens. |
+| `app/Models/User.php` | Queries users, checks passwords, loads roles and permissions, and removes password hashes from every returned row. Chooses the registration role. |
+| `app/Models/UserSession.php` | Starts, finds, extends, and ends login sessions in `user_sessions`. Stores only token hashes, keeps one session per user, and deletes expired sessions. |
 
 A user has one role, and a role has permissions such as `users.view`. The first registered user becomes `super-admin` when the users table is empty; later registrations receive the `user` role. Create that first account before allowing public access to a fresh installation.
 
-The user's `session_version` is a number stored in the database and included in their token. Increasing that number causes authentication to reject older tokens.
+Login creates one session per user in `user_sessions`; logging in on another device replaces it. A session ends after 7 days without use or 90 days after login, and logout, a password change, or deactivation ends it immediately.
 
 ## Application views
 
@@ -112,15 +115,22 @@ These files are PHP programs run from the terminal. `cli/make` and `cli/rate-lim
 | File | What it contains and does |
 |---|---|
 | `cli/make` | Starts the file generator. Creates a controller, model, middleware class, or timestamped migration from a template. Example: `php cli/make controller Product`. |
-| `cli/migrate.php` | Starts the migration runner. Shows migration status, applies pending migrations, or reverses the latest batch. Accepts an optional connection name after the command. |
-| `cli/rate-limit` | Manages the same IP limiter records used by the API. Supports `status`, `block`, `clear`, and `blocked`. Example: `php cli/rate-limit status 192.0.2.10`. |
-| `cli/check-deploy` | Requests private paths such as `/.git/HEAD`, `/config/app.php`, and `/storage/logs/` from a deployed site and fails if any is reachable. Example: `php cli/check-deploy https://api.example.com`. |
+| `cli/migrate.php` | Starts the migration runner. Shows migration status, applies pending migrations, or reverses the latest batch; rollback only prints its plan unless `--force` is given. Accepts an optional connection name after the command. |
+| `cli/rate-limit` | Manages the same IP limiter records used by the API. Supports `status`, `block`, `clear`, `blocked`, and `prune` (deletes unused counters). Example: `php cli/rate-limit status 192.0.2.10`. |
+| `cli/check-deploy` | Requests private paths such as `/.git/HEAD`, `/config/app.php`, today's log file, and `/tests/run.php` from a deployed site and fails if any is reachable. Example: `php cli/check-deploy https://api.example.com`. |
+
+## Tests
+
+| File | What it contains and does |
+|---|---|
+| `tests/run.php` | Framework regression tests with no dependencies. Covers request input, routing, responses, logging, validation limits, JWT, passwords, models (on a temporary SQLite file), uploads, mail, and the generator. Exits with code 1 if any test fails. |
 
 ## Application database migration
 
 | File | What it contains and does |
 |---|---|
-| `migrations/2026_08_25_000001_init_project.php` | Creates `roles`, `permissions`, `role_permissions`, `users`, `activity_logs`, and `email_logs`. Inserts the standard roles and permissions and grants all permissions to the administrative roles. Its `down()` method drops these tables in the required order. |
+| `migrations/2026_08_25_000001_init_project.php` | Creates `roles`, `permissions`, `role_permissions`, `users`, `user_sessions`, `activity_logs`, and `email_logs`. Inserts the standard roles and permissions and grants all permissions to the administrative roles. Its `down()` method drops these tables in the required order. |
+| `migrations/2026_10_14_173933_create_user_sessions_table.php` | Adds `user_sessions` to databases created before sessions existed. Does nothing on a fresh installation. |
 
 The migration creates no default user or password. The migration runner separately maintains a `migrations` table to remember which files have run. A rollback can remove tables and their data, so use it only when you intend to reverse those changes.
 
@@ -144,7 +154,7 @@ A JWT is a signed access token. The signature lets the server check that a token
 
 | File | What it contains and does |
 |---|---|
-| `src/Auth/AccessToken.php` | Builds the user-and-token response used after authentication. Includes the user's ID, username, and session version in the token and returns its type and lifetime. |
+| `src/Auth/SessionToken.php` | Generates random session tokens, hashes them for storage, and rejects malformed tokens before any database lookup. |
 | `src/Auth/JWT.php` | Creates signed JWTs and checks incoming tokens. Verifies the signature, timestamps, issuer, and audience. |
 | `src/Auth/JWTException.php` | Defines the error type for token creation and verification failures. It lets other code recognize a token-related failure. |
 | `src/Auth/Password.php` | Creates bcrypt password hashes, checks passwords against hashes, and detects hashes that need updating when the configured hashing cost changes. |
@@ -168,7 +178,7 @@ The migration runner creates its tracking table when it first migrates or rolls 
 | File | What it contains and does |
 |---|---|
 | `src/Http/Request.php` | Wraps incoming JSON, form fields, query values, headers, cookies, uploaded files, and route parameters. Provides validation helpers, trusted-proxy handling, and a place to store the authenticated user. |
-| `src/Http/Response.php` | Builds and sends responses with status codes and headers. Supports success/error JSON, text, HTML, PHP views with data, cookies, redirects, streams, and downloads. |
+| `src/Http/Response.php` | Builds and sends responses with status codes and headers. Supports success JSON, error JSON with a string `message` and an `errors` object, text, HTML, PHP views with data, cookies, redirects, streams, and downloads. |
 | `src/Http/CORS.php` | Adds browser cross-origin response headers when the requesting origin is allowed. Uses the configured methods, headers, and credential policy. |
 | `src/Http/IPAddress.php` | Normalizes IPv4 and IPv6 addresses and matches them against IPs or CIDR ranges for trusted proxies. |
 | `src/Http/Pagination.php` | Wraps a result list with its total, limit, offset, returned count, and information about the next page. |
@@ -191,15 +201,15 @@ The migration runner creates its tracking table when it first migrates or rolls 
 
 | File | What it contains and does |
 |---|---|
-| `src/RateLimit/RateLimiter.php` | Counts requests per IP in private JSON files. Locks files while updating them, applies pauses and blocks, and provides the manual IP management methods used by the API and CLI. |
-| `src/RateLimit/RateLimitDecision.php` | Holds a limiter result: whether a request is allowed, whether the IP is blocked, remaining requests, reset time, and retry delay. The application uses it to build response headers and errors. |
+| `src/RateLimit/RateLimiter.php` | Counts requests in private fixed-window files: per client (IPv4 address or IPv6 /64) before routing, and per any key such as a user or login username. Manages manual IP blocks and deletes unused counters. |
+| `src/RateLimit/RateLimitDecision.php` | Holds a limiter result: whether a request is allowed, whether the IP is blocked, remaining requests, reset time, and retry delay. Builds the 429 or 403 response and the `X-RateLimit-*` headers. |
 
 ## Framework validation
 
 | File | What it contains and does |
 |---|---|
 | `src/Validation/Validator.php` | Checks values against rules for types, bounds, formats, conditional requirements, date comparisons, and database existence or uniqueness. Supports wildcard array-item rules, rejects unknown fields in declared schemas, and returns normalized values. |
-| `src/Validation/ValidationException.php` | Holds the messages produced when validation fails. The application returns these failures as HTTP 422 responses. |
+| `src/Validation/ValidationException.php` | Holds validation errors keyed by field, with request-level errors under `_request`. The application returns them as HTTP 422 with the message `Invalid Data`. |
 
 ## Framework logging, mail, and uploads
 
@@ -226,7 +236,8 @@ These files contain runtime data rather than application instructions. Apache bl
 | `storage/uploads/.gitignore` | Keeps uploaded files out of Git while keeping the upload folder's placeholder file. |
 | `storage/logs/YYYY-MM-DD.log` | Daily request log entries written by `RequestLogger` and read by `ServerLog`. These are different from user activity records stored in the database. |
 | `storage/logs/errors-YYYY-MM-DD.log` | Unexpected exceptions and fatal errors written by `ErrorLogger`, with the request ID returned to the client. |
-| `storage/rate-limiter/*.json` | Per-IP request counts, violation counts, pauses, and blocks used by `RateLimiter`. |
+| `storage/rate-limiter/counters/*.json` | Request counters used by `RateLimiter`, one file per client, user, or login username. Unused files are deleted after `record_ttl_seconds`. |
+| `storage/rate-limiter/blocked/*.json` | IP addresses blocked manually through the API or `php cli/rate-limit block`. |
 | `storage/uploads/*` | Uploaded files stored under generated names after validation. The saved file type depends on the allowed upload policy. |
 | `storage/backups/*.sql` | Temporary database exports, deleted as soon as the ZIP is written. |
 | `storage/backups/*.zip` | Temporary download archives containing those SQL exports. The backup controller removes temporary files after sending them. |

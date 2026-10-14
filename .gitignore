@@ -1,6 +1,6 @@
 /.env
 /storage/logs/*.log
-/storage/rate-limiter/*.json
+/storage/rate-limiter/*
 /storage/uploads/*
 !/storage/uploads/.gitignore
 /storage/backups/*

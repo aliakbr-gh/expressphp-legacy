@@ -10,6 +10,18 @@ use RuntimeException;
 
 final class MakeCommand
 {
+    // PHP keywords and reserved class names that cannot name a class.
+    private const RESERVED = [
+        'abstract', 'and', 'array', 'as', 'bool', 'break', 'callable', 'case', 'catch', 'class', 'clone', 'const',
+        'continue', 'declare', 'default', 'do', 'echo', 'else', 'elseif', 'empty', 'enddeclare', 'endfor',
+        'endforeach', 'endif', 'endswitch', 'endwhile', 'enum', 'eval', 'exit', 'extends', 'false', 'final',
+        'finally', 'float', 'fn', 'for', 'foreach', 'function', 'global', 'goto', 'if', 'implements', 'include',
+        'instanceof', 'insteadof', 'int', 'interface', 'isset', 'iterable', 'list', 'match', 'mixed', 'namespace',
+        'never', 'new', 'null', 'object', 'or', 'parent', 'print', 'private', 'protected', 'public', 'readonly',
+        'require', 'resource', 'return', 'self', 'static', 'string', 'switch', 'throw', 'trait', 'true', 'try',
+        'unset', 'use', 'var', 'void', 'while', 'xor', 'yield',
+    ];
+
     public function __construct(
         private readonly string $root,
         private readonly string $timezone = 'UTC',
@@ -168,6 +180,9 @@ PHP;
         $class = implode('', array_map(static fn(string $word): string => ucfirst($word), $words));
         if ($class === '' || preg_match('/^[A-Za-z][A-Za-z0-9]*$/', $class) !== 1) {
             throw new RuntimeException('The class name is invalid.');
+        }
+        if (in_array(strtolower($class . $suffix), self::RESERVED, true)) {
+            throw new RuntimeException("[{$class}{$suffix}] is a reserved word in PHP and cannot be a class name.");
         }
         return $class . $suffix;
     }

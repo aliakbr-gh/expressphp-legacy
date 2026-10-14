@@ -5,11 +5,16 @@ declare(strict_types=1);
 namespace ExpressPHP\Core;
 
 use ErrorException;
+use ExpressPHP\Http\Request;
 use ExpressPHP\Logging\ErrorLogger;
 
 final class ErrorHandler
 {
     private const FATAL_ERRORS = [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR];
+
+    private static ?Request $request = null;
+    private static array $fallbackHeaders = [];
+    private static array $loggedDeprecations = [];
 
     /**
      * Keeps PHP diagnostics out of HTTP responses and routes them to the private error log.
@@ -27,13 +32,16 @@ final class ErrorHandler
                 return false;
             }
 
-            $exception = new ErrorException($message, 0, $severity, $file, $line);
-            // Deprecations are recorded but must not break production after a PHP upgrade.
+            // Deprecations are recorded once per location and must not break production after a PHP upgrade.
             if ($severity === E_DEPRECATED || $severity === E_USER_DEPRECATED) {
-                ErrorLogger::log($exception);
+                $location = $file . ':' . $line;
+                if (!isset(self::$loggedDeprecations[$location])) {
+                    self::$loggedDeprecations[$location] = true;
+                    ErrorLogger::log(new ErrorException($message, 0, $severity, $file, $line), self::$request);
+                }
                 return true;
             }
-            throw $exception;
+            throw new ErrorException($message, 0, $severity, $file, $line);
         });
 
         register_shutdown_function(static function (): void {
@@ -42,13 +50,32 @@ final class ErrorHandler
                 return;
             }
 
-            ErrorLogger::log(new ErrorException($error['message'], 0, $error['type'], $error['file'], $error['line']));
-            if (!headers_sent()) {
-                http_response_code(500);
-                header('Content-Type: application/json; charset=utf-8');
-                header('Cache-Control: no-store');
-                echo '{"success":false,"message":"Internal Server Error","data":null}';
+            ErrorLogger::log(
+                new ErrorException($error['message'], 0, $error['type'], $error['file'], $error['line']),
+                self::$request,
+            );
+            if (headers_sent()) {
+                return;
             }
+
+            http_response_code(500);
+            header('Content-Type: application/json; charset=utf-8');
+            header('Cache-Control: no-store');
+            header('X-Content-Type-Options: nosniff');
+            foreach (self::$fallbackHeaders as $name => $value) {
+                header($name . ': ' . $value);
+            }
+            echo '{"success":false,"message":"Internal Server Error","errors":{},"data":null}';
         });
+    }
+
+    /**
+     * Records the current request so a fatal error can be logged with it and answered with its request id
+     * and CORS headers; without CORS headers a browser reports a network error instead of the 500.
+     */
+    public static function setRequest(Request $request, array $fallbackHeaders = []): void
+    {
+        self::$request = $request;
+        self::$fallbackHeaders = $fallbackHeaders;
     }
 }

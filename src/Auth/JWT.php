@@ -97,6 +97,17 @@ final class JWT
                 throw new JWTException("JWT claim [{$claim}] must be an integer.");
             }
         }
+        // Wrong types become JWTException (401), never a PHP conversion error (500).
+        foreach (['iss', 'sub', 'jti'] as $claim) {
+            if (!is_string($payload[$claim]) || $payload[$claim] === '') {
+                throw new JWTException("JWT claim [{$claim}] must be a non-empty string.");
+            }
+        }
+        $audiences = $payload['aud'];
+        if (!is_string($audiences) && !(is_array($audiences) && array_is_list($audiences)
+            && array_filter($audiences, 'is_string') === $audiences)) {
+            throw new JWTException('JWT claim [aud] must be a string or a list of strings.');
+        }
         if ($payload['exp'] <= $now - $leeway) {
             throw new JWTException('JWT has expired.');
         }
@@ -106,7 +117,7 @@ final class JWT
         if ($payload['iat'] > $now + $leeway) {
             throw new JWTException('JWT was issued in the future.');
         }
-        if (!hash_equals(self::issuer(), (string)$payload['iss'])) {
+        if (!hash_equals(self::issuer(), $payload['iss'])) {
             throw new JWTException('Invalid JWT issuer.');
         }
 
@@ -177,7 +188,7 @@ final class JWT
         return self::checkedSecret((string)$previous[$keyId]);
     }
 
-    private static function checkedSecret(string $secret): string
+    private static function checkedSecret(#[\SensitiveParameter] string $secret): string
     {
         if (strlen($secret) < 32) {
             throw new JWTException('JWT secret must contain at least 32 bytes.');

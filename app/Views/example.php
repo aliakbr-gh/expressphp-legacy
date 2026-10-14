@@ -16,7 +16,7 @@ declare(strict_types=1);
     <h1><?= $escape($title ?? 'ExpressPHP') ?></h1>
     <p><?= $escape($message ?? 'Your view is ready.') ?></p>
     <ul>
-        <?php foreach ($cars as $car): ?>
+        <?php foreach ($cars ?? [] as $car): ?>
             <li><?= $escape($car) ?></li>
         <?php endforeach; ?>
     </ul>

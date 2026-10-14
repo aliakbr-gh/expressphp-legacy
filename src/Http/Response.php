@@ -13,6 +13,9 @@ final class Response
 {
     private const JSON_FLAGS = JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE;
 
+    // Default policy for rendered views: no inline scripts or styles, no framing, no foreign form targets.
+    private const VIEW_CSP = "default-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+
     // Served types come from the extension, never from sniffing file contents.
     private const FILE_TYPES = [
         'txt' => 'text/plain; charset=utf-8',
@@ -78,18 +81,24 @@ final class Response
         ]);
     }
 
+    /**
+     * Error responses always have the same shape, so typed mobile decoders never see a field change type:
+     * {"success": false, "message": string, "errors": {field: [messages]}, "data": null}.
+     *
+     * @param array<string, list<string>> $errors
+     */
     public function error(
-        string|array $message = 'Request failed',
-        int          $status = 400,
+        string $message = 'Request failed',
+        int    $status = 400,
+        array  $errors = [],
+        mixed  $data = null,
     ): self {
-        if (is_array($message) && count($message) === 1) {
-            $message = reset($message);
-        }
-
         return $this->status($status)->json([
             'success' => false,
             'message' => $message,
-            'data' => null,
+            // Always a JSON object, including when empty or when a field name is numeric.
+            'errors' => (object)$errors,
+            'data' => $data,
         ]);
     }
 
@@ -103,9 +112,12 @@ final class Response
         return $this->setBody($html, 'text/html; charset=utf-8');
     }
 
+    /**
+     * Renders a template with a restrictive Content-Security-Policy. Call header() afterwards to relax it.
+     */
     public function view(string $name, array $data = []): self
     {
-        return $this->html($this->views->render($name, $data));
+        return $this->html($this->views->render($name, $data))->header('Content-Security-Policy', self::VIEW_CSP);
     }
 
     public function send(string $body, ?string $contentType = null): self
@@ -171,10 +183,18 @@ final class Response
         );
     }
 
+    /**
+     * Sends an ASCII filename for old clients plus an RFC 5987 UTF-8 filename* for names such as "رپورٹ.pdf".
+     */
     public function attachment(string $filename): self
     {
-        $safe = str_replace(["\r", "\n", '"', '\\'], '', basename($filename));
-        return $this->header('Content-Disposition', 'attachment; filename="' . $safe . '"');
+        $name = str_replace(["\r", "\n", "\0"], '', basename(str_replace('\\', '/', $filename)));
+        $ascii = preg_replace('/[^\x20-\x7e]|["\\\\]/u', '_', $name) ?? 'download';
+        $value = 'attachment; filename="' . ($ascii === '' ? 'download' : $ascii) . '"';
+        if ($ascii !== $name) {
+            $value .= "; filename*=UTF-8''" . rawurlencode($name);
+        }
+        return $this->header('Content-Disposition', $value);
     }
 
     /**

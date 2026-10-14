@@ -62,9 +62,30 @@ final class Database
         if ($driver === 'mysql') {
             // TIMESTAMP columns are stored in UTC; reading them in UTC keeps them consistent with PHP.
             $pdo->prepare('SET time_zone = ?')->execute([(string)($connection['timezone'] ?? '+00:00')]);
+            $timeout = (int)($connection['statement_timeout_ms'] ?? 0);
+            if ($timeout > 0) {
+                self::setStatementTimeout($pdo, $timeout);
+            }
         }
 
         return self::$connections[$name] = $pdo;
+    }
+
+    /**
+     * Limits how long one statement may run on this MySQL or MariaDB session; 0 removes the limit.
+     * ATTR_TIMEOUT only covers connecting, so without this a slow query holds a PHP worker indefinitely.
+     * MySQL applies the limit to read-only SELECT statements; MariaDB applies it to all statements.
+     */
+    public static function setStatementTimeout(PDO $pdo, int $milliseconds): void
+    {
+        // The value is an int clamped here, so it is written into the statement: MySQL rejects these
+        // variables when they arrive as bound string parameters.
+        $milliseconds = max(0, $milliseconds);
+        if (str_contains((string)$pdo->getAttribute(PDO::ATTR_SERVER_VERSION), 'MariaDB')) {
+            $pdo->exec('SET SESSION max_statement_time = ' . sprintf('%.3F', $milliseconds / 1000));
+            return;
+        }
+        $pdo->exec('SET SESSION max_execution_time = ' . $milliseconds);
     }
 
     /**

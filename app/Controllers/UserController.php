@@ -6,6 +6,7 @@ namespace App\Controllers;
 
 use App\Models\ActivityLog;
 use App\Models\User;
+use App\Models\UserSession;
 use ExpressPHP\Auth\Password;
 use ExpressPHP\Http\Request;
 use ExpressPHP\Http\Response;
@@ -16,6 +17,7 @@ final class UserController
     public function __construct(
         private readonly User        $users = new User(),
         private readonly ActivityLog $activities = new ActivityLog(),
+        private readonly UserSession $sessions = new UserSession(),
     ) {
     }
 
@@ -89,16 +91,18 @@ final class UserController
                 return $response->error('Username has already been taken', 409);
             }
         }
-        $invalidateSessions = isset($data['password'])
+        // A new password or a deactivation signs the user out; a role change does not need to,
+        // because permissions are reloaded from the database on every request.
+        $endSession = isset($data['password'])
             || (array_key_exists('is_active', $data) && (bool)$data['is_active'] !== (bool)$user['is_active']);
         if (isset($data['password'])) {
             $data['password'] = Password::hash($data['password']);
         }
-        if ($invalidateSessions) {
-            $data['session_version'] = (int)$user['session_version'] + 1;
-        }
 
         $this->users->update($id, $data);
+        if ($endSession) {
+            $this->sessions->endForUser($id);
+        }
         $updated = $this->users->findDetailed($id);
         $this->activities->record(
             $request,
@@ -150,10 +154,7 @@ final class UserController
         }
 
         $data = $request->validate(['role_id' => 'required|integer|min:1|exists:roles,id']);
-        $this->users->update($id, [
-            'role_id' => $data['role_id'],
-            'session_version' => (int)$user['session_version'] + 1,
-        ]);
+        $this->users->update($id, ['role_id' => $data['role_id']]);
         $updated = $this->users->findDetailed($id);
         $this->activities->record(
             $request,

@@ -72,7 +72,7 @@ abstract class Model
         return $row === null ? null : $this->present($row);
     }
 
-    public function create(array $attributes): array
+    public function create(#[\SensitiveParameter] array $attributes): array
     {
         $attributes = $this->fillable($attributes);
         if ($attributes === []) {
@@ -90,7 +90,7 @@ abstract class Model
         return $this->find((string)$this->pdo()->lastInsertId()) ?? $this->present($attributes);
     }
 
-    public function update(int|string $id, array $attributes): bool
+    public function update(int|string $id, #[\SensitiveParameter] array $attributes): bool
     {
         $attributes = $this->fillable($attributes);
         if ($attributes === []) {
@@ -145,7 +145,7 @@ abstract class Model
      * Prepares and executes a statement, binding each value with a PDO type matching its PHP type.
      * Binding everything as a string would turn false into '', which strict MySQL rejects for integers.
      */
-    protected function run(string $sql, array $bindings = []): PDOStatement
+    protected function run(string $sql, #[\SensitiveParameter] array $bindings = []): PDOStatement
     {
         $statement = $this->pdo()->prepare($sql);
         foreach ($bindings as $name => $value) {

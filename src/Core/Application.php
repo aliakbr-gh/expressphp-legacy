@@ -92,6 +92,10 @@ final class Application
     {
         Debugger::setRequest($request);
         $CORS = new CORS($this->config['cors'] ?? []);
+        ErrorHandler::setRequest($request, [
+            'X-Request-ID' => $request->requestId(),
+            ...$CORS->apply($request, new Response())->headers(),
+        ]);
         $decision = null;
 
         try {
@@ -106,7 +110,7 @@ final class Application
 
             $decision = $this->rateLimiter->check($request);
             if (!$decision->allowed) {
-                return $this->finish($request, $CORS, $this->rateLimitResponse($decision));
+                return $this->finish($request, $CORS, $decision->toResponse(new Response()));
             }
 
             if ($request->bodyTooLarge()) {
@@ -114,9 +118,9 @@ final class Application
             } else {
                 $response = $this->router->dispatch($request, new Response());
             }
-            return $this->finish($request, $CORS, $this->rateLimitHeaders($response, $decision));
+            return $this->finish($request, $CORS, $decision->withHeaders($response));
         } catch (ValidationException $exception) {
-            $response = (new Response())->error($exception->errors(), 422);
+            $response = (new Response())->error($exception->getMessage(), 422, $exception->errors());
         } catch (HttpException $exception) {
             $response = (new Response())->error($exception->getMessage(), $exception->statusCode());
         } catch (PDOException $exception) {
@@ -130,7 +134,7 @@ final class Application
         }
 
         if ($decision instanceof RateLimitDecision) {
-            $response = $this->rateLimitHeaders($response, $decision);
+            $response = $decision->withHeaders($response);
         }
 
         return $this->finish($request, $CORS, $response);
@@ -166,29 +170,6 @@ final class Application
         return $CORS->apply($request, $this->securityHeaders($response, $request));
     }
 
-    private function rateLimitResponse(RateLimitDecision $decision): Response
-    {
-        if ($decision->blocked && $decision->retryAfter === 0) {
-            $response = (new Response())->status(403)->json([
-                'success' => false,
-                'message' => 'This IP address has been blocked',
-                'data' => null,
-            ]);
-        } else {
-            $response = (new Response())->status(429)->json([
-                'success' => false,
-                'message' => $decision->blocked ? 'This IP address is temporarily blocked' : 'Too many requests',
-                'data' => [
-                    'retry_after' => $decision->retryAfter,
-                    'violations' => $decision->violations,
-                    'max_violations' => $decision->maxViolations,
-                ],
-            ])->header('Retry-After', (string)$decision->retryAfter);
-        }
-
-        return $this->rateLimitHeaders($response, $decision);
-    }
-
     private function databaseErrorResponse(PDOException $exception, Request $request): Response
     {
         if ((string)$exception->getCode() !== '23000') {
@@ -204,14 +185,6 @@ final class Application
             1452 => (new Response())->error('The selected related record does not exist', 422),
             default => (new Response())->error('A database constraint prevented this operation', 409),
         };
-    }
-
-    private function rateLimitHeaders(Response $response, RateLimitDecision $decision): Response
-    {
-        return $response
-            ->header('X-RateLimit-Limit', (string)$decision->limit)
-            ->header('X-RateLimit-Remaining', (string)$decision->remaining)
-            ->header('X-RateLimit-Reset', (string)$decision->resetAt);
     }
 
     private function securityHeaders(Response $response, Request $request): Response

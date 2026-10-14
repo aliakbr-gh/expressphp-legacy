@@ -35,15 +35,11 @@ final class HealthController
                 'timestamp' => (new DateTimeImmutable())->format(DATE_ATOM),
             ], 'Database is healthy');
         } catch (Throwable) {
-            return $response->status(503)->json([
-                'success' => false,
-                'message' => 'Database is unavailable',
-                'data' => [
-                    'service' => 'database',
-                    'status' => 'unhealthy',
-                    'response_time_ms' => round((microtime(true) - $startedAt) * 1000, 3),
-                    'timestamp' => (new DateTimeImmutable())->format(DATE_ATOM),
-                ],
+            return $response->error('Database is unavailable', 503, data: [
+                'service' => 'database',
+                'status' => 'unhealthy',
+                'response_time_ms' => round((microtime(true) - $startedAt) * 1000, 3),
+                'timestamp' => (new DateTimeImmutable())->format(DATE_ATOM),
             ]);
         }
     }

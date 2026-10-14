@@ -16,7 +16,6 @@ final class User extends Model
         'username',
         'password',
         'is_active',
-        'session_version',
         'role_id',
     ];
     protected array $hidden = ['password'];
@@ -54,7 +53,7 @@ final class User extends Model
         return $this->firstWhere('username', $username);
     }
 
-    public function authenticate(string $username, string $password): ?array
+    public function authenticate(string $username, #[\SensitiveParameter] string $password): ?array
     {
         $user = $this->rawFirstWhere('username', $username);
         $hash = $user['password'] ?? null;
@@ -119,13 +118,6 @@ final class User extends Model
         }
 
         return (int)$roleId;
-    }
-
-    public function incrementSessionVersion(int|string $id): void
-    {
-        Database::connection()->prepare(
-            'UPDATE users SET session_version = session_version + 1 WHERE id = :id'
-        )->execute(['id' => $id]);
     }
 
     private function withPermissions(array $user): array
