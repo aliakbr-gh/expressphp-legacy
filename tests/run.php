@@ -22,6 +22,7 @@ use ExpressPHP\Logging\RequestLogger;
 use ExpressPHP\Mail\SMTPMailer;
 use ExpressPHP\RateLimit\RateLimiter;
 use ExpressPHP\Storage\FileUploader;
+use ExpressPHP\Support\UTF8;
 use ExpressPHP\Validation\ValidationException;
 use ExpressPHP\Validation\Validator;
 
@@ -217,6 +218,15 @@ test('validation errors use a string message and a field map', function () use (
     expect($body['errors']['x'] === ['Invalid key x in request.'], json_encode($body));
     expect($body['data'] === null);
 });
+test('error() normalizes a plain list into _request string lists', function () {
+    $body = json_decode((new Response())->error('x', 400, ['Name is required.'])->body(), true);
+    expect($body['errors'] === ['_request' => ['Name is required.']], json_encode($body));
+    $body = json_decode((new Response())->error('x', 422, ['name' => 'Required.'])->body(), true);
+    expect($body['errors'] === ['name' => ['Required.']], json_encode($body));
+});
+test('the _request field name is reserved in rules', function () {
+    expectThrows(RuntimeException::class, fn() => Validator::validate([], ['_request' => 'optional|string']));
+});
 test('every error response has an errors object', function () use ($app, $server) {
     $notFound = $app->dispatch(new Request('GET', '/missing', server: $server()))->body();
     expect(str_contains($notFound, '"errors":{}') && str_contains($notFound, '"message":"Route not found"'), $notFound);
@@ -250,6 +260,18 @@ test('IPv6 clients are grouped by /64; IPv4 stays per address', function () use 
     expect($limiter->clientKey('2001:db8:1:2:bbbb::9') === $limiter->clientKey('2001:db8:1:2:aaaa::1'));
     expect($limiter->clientKey('203.0.113.5') === '203.0.113.5');
 });
+test('blocking an IPv6 address blocks its /64; old single-address blocks still apply', function () use ($workspace) {
+    $limiter = new RateLimiter(['enabled' => true, 'path' => $workspace . '/v6-limits']);
+    $limiter->block('2001:db8:5:6::1');
+    $other = new Request('GET', '/', server: ['REMOTE_ADDR' => '2001:db8:5:6:ffff::9']);
+    expect($limiter->check($other)->blocked);
+    expect($limiter->status('2001:db8:5:6:ffff::9')['blocked']);
+    $limiter->clear('2001:db8:5:6:ffff::9');
+    expect($limiter->check($other)->allowed);
+    // A block file written by the earlier single-address layout.
+    file_put_contents($workspace . '/v6-limits/blocked/' . hash('sha256', '2001:db8:7::1') . '.json', '{"ip":"2001:db8:7::1","blocked_at":1}');
+    expect($limiter->check(new Request('GET', '/', server: ['REMOTE_ADDR' => '2001:db8:7::1']))->blocked);
+});
 test('manual blocks return 403; clear removes them', function () use ($workspace) {
     $limiter = new RateLimiter(['enabled' => true, 'path' => $workspace . '/limits']);
     $request = new Request('GET', '/', server: ['REMOTE_ADDR' => '198.51.100.7']);
@@ -282,6 +304,16 @@ test('throttle middleware limits each signed-in user', function () use ($config,
     expect($statuses === [200, 200, 429], json_encode($statuses));
     $limited->get('/bad', fn(Request $r, Response $s) => $s->success(), ['throttle:many']);
     expect($limited->dispatch(new Request('GET', '/bad', server: $server()))->statusCode() === 500);
+});
+
+// UTF-8 storage helpers
+test('UTF8 repairs invalid bytes and truncates on character boundaries', function () {
+    expect(UTF8::scrub("ok\xC3") === "ok\u{FFFD}");
+    expect(UTF8::scrub('سلام') === 'سلام');
+    $cut = UTF8::truncate(str_repeat('a', 499) . 'é', 500);
+    expect(strlen($cut) === 499 && preg_match('//u', $cut) === 1, (string)strlen($cut));
+    expect(UTF8::truncate('😀😀', 5) === '😀');
+    expect(UTF8::truncate('short', 500) === 'short');
 });
 
 // Errors and logging

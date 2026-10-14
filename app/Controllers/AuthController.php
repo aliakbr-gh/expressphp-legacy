@@ -17,6 +17,8 @@ final class AuthController
     private readonly RateLimiter $limiter;
     private readonly int $loginMaxAttempts;
     private readonly int $loginWindowSeconds;
+    private readonly int $loginAccountMaxAttempts;
+    private readonly int $loginAccountWindowSeconds;
     private readonly int $sessionIdleSeconds;
     private readonly int $sessionLifetimeSeconds;
 
@@ -28,6 +30,8 @@ final class AuthController
         $this->limiter = new RateLimiter($config->get('rate_limiter', []));
         $this->loginMaxAttempts = (int)$config->get('rate_limiter.login_max_attempts', 5);
         $this->loginWindowSeconds = (int)$config->get('rate_limiter.login_window_seconds', 900);
+        $this->loginAccountMaxAttempts = (int)$config->get('rate_limiter.login_account_max_attempts', 50);
+        $this->loginAccountWindowSeconds = (int)$config->get('rate_limiter.login_account_window_seconds', 3600);
         $this->sessionIdleSeconds = (int)$config->get('auth.session_idle_seconds', 604800);
         $this->sessionLifetimeSeconds = (int)$config->get('auth.session_lifetime_seconds', 7776000);
     }
@@ -59,21 +63,24 @@ final class AuthController
             'password' => 'required|string',
         ]);
 
-        // Failed attempts are counted per username, so guessing one account's password from many
-        // IP addresses is limited too. A successful login resets the count.
-        $key = 'login:' . strtolower(trim($data['username']));
-        $decision = $this->limiter->attempts($key, $this->loginMaxAttempts, $this->loginWindowSeconds);
-        if (!$decision->allowed) {
-            return $decision->toResponse($response);
+        $limits = $this->loginLimits($data['username'], $request->ip());
+        foreach ($limits as [$key, $maxAttempts, $windowSeconds]) {
+            $decision = $this->limiter->attempts($key, $maxAttempts, $windowSeconds);
+            if (!$decision->allowed) {
+                return $decision->toResponse($response);
+            }
         }
 
         $user = $this->users->authenticate($data['username'], $data['password']);
         if ($user === null) {
-            $this->limiter->hit($key, $this->loginMaxAttempts, $this->loginWindowSeconds);
+            foreach ($limits as [$key, $maxAttempts, $windowSeconds]) {
+                $this->limiter->hit($key, $maxAttempts, $windowSeconds);
+            }
             return $response->error('Invalid username or password.', 401);
         }
 
-        $this->limiter->clearKey($key);
+        // Only this client's count is reset; the account-wide count still expires on its own window.
+        $this->limiter->clearKey($limits[0][0]);
         // Starting a session replaces any session on another device.
         $session = $this->sessions->start(
             $user['id'],
@@ -90,6 +97,28 @@ final class AuthController
             'expires_at' => gmdate('Y-m-d\TH:i:s\Z', $session['expires_at']),
             'absolute_expires_at' => gmdate('Y-m-d\TH:i:s\Z', $session['absolute_expires_at']),
         ], 'Login successful');
+    }
+
+    /**
+     * Returns the failed-login counters for this attempt as [key, max attempts, window seconds].
+     *
+     * Keys use the account id from a database lookup, so spellings the database treats as equal
+     * ("akbar", "ÁKBÁR") share one count. Failures are counted per account and client network, so one
+     * attacker cannot lock other people out, plus a higher account-wide limit against distributed guessing.
+     * Unknown usernames are counted per client network.
+     */
+    private function loginLimits(string $username, string $ip): array
+    {
+        $client = $this->limiter->clientKey($ip);
+        $account = $this->users->findByUsername($username);
+        if ($account === null) {
+            return [["login:client:{$client}", $this->loginMaxAttempts, $this->loginWindowSeconds]];
+        }
+
+        return [
+            ["login:user:{$account['id']}:client:{$client}", $this->loginMaxAttempts, $this->loginWindowSeconds],
+            ["login:user:{$account['id']}", $this->loginAccountMaxAttempts, $this->loginAccountWindowSeconds],
+        ];
     }
 
     public function me(Request $request, Response $response): Response

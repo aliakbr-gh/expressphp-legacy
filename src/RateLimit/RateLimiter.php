@@ -71,7 +71,7 @@ final class RateLimiter
             if (random_int(1, self::CLEANUP_CHANCE) === 1) {
                 $this->prune();
             }
-            if (is_file($this->blockFile($request->ip()))) {
+            if ($this->isBlocked($request->ip())) {
                 return new RateLimitDecision(false, true, $this->maxRequests, 0, 0);
             }
             return $this->hit('client:' . $this->clientKey($request->ip()), $this->maxRequests, $this->windowSeconds);
@@ -165,7 +165,7 @@ final class RateLimiter
     {
         $ip = $this->validIP($ip);
         $client = $this->clientKey($ip);
-        $block = $this->readFile($this->blockFile($ip));
+        $block = $this->readFile($this->blockFile($client)) ?: $this->readFile($this->blockFile($ip));
         $counter = $this->currentWindow($this->readFile($this->counterFile('client:' . $client)), time(), $this->windowSeconds);
 
         return [
@@ -180,13 +180,14 @@ final class RateLimiter
     }
 
     /**
-     * Blocks one IP address until it is cleared.
+     * Blocks an IP address until it is cleared. An IPv6 address blocks its whole client network (/64 by
+     * default), because one device can rotate through every address in it.
      */
     public function block(string $ip): array
     {
         $ip = $this->validIP($ip);
-        $record = ['ip' => $ip, 'blocked_at' => time()];
-        $this->write($this->blockFile($ip), $record);
+        $record = ['ip' => $ip, 'client' => $this->clientKey($ip), 'blocked_at' => time()];
+        $this->write($this->blockFile($record['client']), $record);
         return $record;
     }
 
@@ -196,7 +197,9 @@ final class RateLimiter
     public function clear(string $ip): array
     {
         $ip = $this->validIP($ip);
-        foreach ([$this->blockFile($ip), $this->counterFile('client:' . $this->clientKey($ip))] as $file) {
+        $client = $this->clientKey($ip);
+        // The single-address file covers blocks written before blocks applied to whole networks.
+        foreach ([$this->blockFile($client), $this->blockFile($ip), $this->counterFile('client:' . $client)] as $file) {
             if (is_file($file)) {
                 @unlink($file);
             }
@@ -207,7 +210,7 @@ final class RateLimiter
     /**
      * Returns the manually blocked IP addresses, most recently blocked first.
      *
-     * @return list<array{ip: string, blocked_at: int}>
+     * @return list<array{ip: string, client?: string, blocked_at: int}>
      */
     public function blocked(): array
     {
@@ -403,7 +406,8 @@ final class RateLimiter
             $record = $this->readFile($legacy);
             $ip = is_string($record['ip'] ?? null) ? IPAddress::normalize($record['ip']) : null;
             if ($ip !== null && (bool)($record['blocked'] ?? false) && ($record['blocked_until'] ?? null) === null) {
-                $this->write($this->blockFile($ip), ['ip' => $ip, 'blocked_at' => (int)($record['blocked_at'] ?? time())]);
+                $client = $this->clientKey($ip);
+                $this->write($this->blockFile($client), ['ip' => $ip, 'client' => $client, 'blocked_at' => (int)($record['blocked_at'] ?? time())]);
             }
             @unlink($legacy);
         }
@@ -418,11 +422,21 @@ final class RateLimiter
     }
 
     /**
-     * Returns the block file for an IP address.
+     * Reports whether the address's client network, or the single address, is blocked.
      */
-    private function blockFile(string $ip): string
+    private function isBlocked(string $ip): bool
     {
-        return $this->path . '/blocked/' . hash('sha256', IPAddress::normalize($ip) ?? $ip) . '.json';
+        $client = $this->clientKey($ip);
+        return is_file($this->blockFile($client))
+            || ($client !== $ip && is_file($this->blockFile(IPAddress::normalize($ip) ?? $ip)));
+    }
+
+    /**
+     * Returns the block file for a client key or IP address.
+     */
+    private function blockFile(string $key): string
+    {
+        return $this->path . '/blocked/' . hash('sha256', $key) . '.json';
     }
 
     /**

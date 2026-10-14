@@ -365,11 +365,18 @@ current `kid` and `secret` into `jwt.previous_keys` and set a new `kid` and `sec
 - **Every client:** `rate_limiter.max_requests` per `window_seconds` (600 per minute) for each IPv4 address or IPv6 /64
   network. This is generous because mobile carriers put many phones behind one IPv4 address.
 - **Each signed-in user:** add `throttle:<max>,<seconds>` after `auth`, for example `['auth', 'throttle:120,60']`.
-- **Login:** `login_max_attempts` failed logins per username within `login_window_seconds` (5 per 15 minutes). A
-  successful login resets the count.
+- **Login:** failures are counted against the account id, so every spelling the database treats as the same username
+  (`akbar`, `ÁKBÁR`) shares one count:
+  - `login_max_attempts` failures per account and client network within `login_window_seconds` (5 per 15 minutes),
+    so an attacker locks out only their own network;
+  - `login_account_max_attempts` failures per account from all networks within `login_account_window_seconds`
+    (50 per hour), against guessing from many networks;
+  - for usernames that don't exist, `login_max_attempts` failures per client network.
+
+  A successful login resets that client's count.
 
 A limited request gets 429 with `Retry-After` and `data.retry_after` in seconds. Manually blocked addresses get 403
-until cleared. Unused counters are deleted after `record_ttl_seconds`, automatically and with
+until cleared; blocking an IPv6 address blocks its whole /64 network. Unused counters are deleted after `record_ttl_seconds`, automatically and with
 `php cli/rate-limit prune`. Counters are stored per server; with several servers behind a load balancer, each keeps
 its own.
 

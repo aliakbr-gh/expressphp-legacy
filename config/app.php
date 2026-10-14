@@ -41,9 +41,12 @@ $config = [
         'max_requests' => 600,
         'window_seconds' => 60,
         'ipv6_prefix' => 64,
-        // Failed logins allowed per username before a 429.
+        // Failed logins allowed per account and client network before a 429, and per account from all
+        // networks together. Unknown usernames are counted per client network with the first limit.
         'login_max_attempts' => 5,
         'login_window_seconds' => 900,
+        'login_account_max_attempts' => 50,
+        'login_account_window_seconds' => 3600,
         // Unused counters are deleted after this long; manual IP blocks are kept until cleared.
         'record_ttl_seconds' => 86400,
         'path' => dirname(__DIR__) . '/storage/rate-limiter',

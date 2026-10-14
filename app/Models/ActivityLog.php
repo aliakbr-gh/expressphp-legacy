@@ -8,6 +8,7 @@ use DateTimeImmutable;
 use ExpressPHP\Database\Database;
 use ExpressPHP\Database\Model;
 use ExpressPHP\Http\Request;
+use ExpressPHP\Support\UTF8;
 
 final class ActivityLog extends Model
 {
@@ -63,7 +64,7 @@ final class ActivityLog extends Model
             'user_name' => (string)($user['name'] ?? $user['username'] ?? 'Unknown user'),
             'description' => $description,
             'ip_address' => $request->ip(),
-            'user_agent' => $request->userAgent(),
+            'user_agent' => $request->userAgent() === null ? null : UTF8::truncate($request->userAgent(), 500),
         ]);
     }
 }

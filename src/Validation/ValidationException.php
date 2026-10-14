@@ -37,17 +37,35 @@ final class ValidationException extends RuntimeException
 
     /**
      * Converts errors to field => list of messages. A plain list of messages becomes request-level errors.
+     * Response::error() uses the same conversion, so every error response has one shape.
+     *
+     * @return array<string, list<string>>
      */
-    private static function normalize(array $errors): array
+    public static function normalize(array $errors): array
     {
-        if (array_is_list($errors)) {
-            return $errors === [] ? [] : [self::REQUEST_FIELD => array_map('strval', $errors)];
+        if ($errors === []) {
+            return [];
+        }
+        // A list of messages is request-level. A list whose values are lists is a field map whose
+        // field names happen to be numeric, such as ['0' => [...]], which PHP stores with integer keys.
+        if (array_is_list($errors) && array_filter($errors, 'is_array') === []) {
+            return [self::REQUEST_FIELD => array_map(self::message(...), $errors)];
         }
 
         $normalized = [];
         foreach ($errors as $field => $messages) {
-            $normalized[(string)$field] = array_values(array_map('strval', is_array($messages) ? $messages : [$messages]));
+            $normalized[(string)$field] = array_map(self::message(...), array_values(is_array($messages) ? $messages : [$messages]));
         }
         return $normalized;
+    }
+
+    /**
+     * Converts one error message to a string; non-scalar values are JSON-encoded instead of becoming "Array".
+     */
+    private static function message(mixed $message): string
+    {
+        return is_scalar($message) || $message === null
+            ? (string)$message
+            : (string)json_encode($message, JSON_INVALID_UTF8_SUBSTITUTE | JSON_UNESCAPED_SLASHES);
     }
 }

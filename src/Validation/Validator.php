@@ -604,7 +604,7 @@ final class Validator
     }
 
     /**
-     * Rejects empty segments, null bytes and partial wildcards in a field path.
+     * Rejects empty segments, null bytes, partial wildcards and the reserved _request name in a field path.
      */
     private static function assertFieldPath(string $field): void
     {
@@ -615,6 +615,10 @@ final class Validator
             if ($segment === '' || ($segment !== '*' && str_contains($segment, '*'))) {
                 throw new RuntimeException("Invalid validation field path [{$field}].");
             }
+        }
+        // Request-level errors are reported under this key, so no field may use it.
+        if (explode('.', $field)[0] === ValidationException::REQUEST_FIELD) {
+            throw new RuntimeException('The field name [' . ValidationException::REQUEST_FIELD . '] is reserved.');
         }
     }
 

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ExpressPHP\Http;
 
 use Closure;
+use ExpressPHP\Validation\ValidationException;
 use ExpressPHP\View\View;
 use InvalidArgumentException;
 use RuntimeException;
@@ -114,8 +115,8 @@ final class Response
         return $this->status($status)->json([
             'success' => false,
             'message' => $message,
-            // Always a JSON object, including when empty or when a field name is numeric.
-            'errors' => (object)$errors,
+            // Always a JSON object of string lists, including when empty or when a field name is numeric.
+            'errors' => (object)ValidationException::normalize($errors),
             'data' => $data,
         ]);
     }

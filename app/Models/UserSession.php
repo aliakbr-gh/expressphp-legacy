@@ -5,7 +5,10 @@ declare(strict_types=1);
 namespace App\Models;
 
 use ExpressPHP\Auth\SessionToken;
+use ExpressPHP\Database\Database;
 use ExpressPHP\Database\Model;
+use ExpressPHP\Support\UTF8;
+use PDOException;
 
 /**
  * Database-backed login sessions: one per user, with a sliding idle expiry and an absolute lifetime.
@@ -37,26 +40,45 @@ final class UserSession extends Model
         $absoluteExpiresAt = $now + $lifetimeSeconds;
         $expiresAt = min($now + $idleSeconds, $absoluteExpiresAt);
 
-        // The unique user_id key makes this replace the previous session in one statement.
+        $values = [
+            'user_id' => (int)$userId,
+            'token_hash' => SessionToken::hash($token),
+            'expires_at' => $expiresAt,
+            'absolute_expires_at' => $absoluteExpiresAt,
+            'ip_address' => $ipAddress,
+            // Client headers can hold invalid UTF-8 and are cut on a character boundary; strict MySQL rejects both.
+            'user_agent' => $userAgent === null ? null : UTF8::truncate($userAgent, 500),
+        ];
+
+        // Delete-then-insert in one transaction works on MySQL and MariaDB, unlike the deprecated VALUES()
+        // upsert. Two simultaneous logins can collide on the unique user_id or deadlock; one retry settles it.
+        for ($attempt = 1; ; $attempt++) {
+            try {
+                Database::transaction(fn() => $this->replace($values), $this->connection);
+                break;
+            } catch (PDOException $exception) {
+                if ($attempt >= 2 || !in_array((int)($exception->errorInfo[1] ?? 0), [1062, 1213], true)) {
+                    throw $exception;
+                }
+            }
+        }
+
+        return ['token' => $token, 'expires_at' => $expiresAt, 'absolute_expires_at' => $absoluteExpiresAt];
+    }
+
+    /**
+     * Removes the user's current session and inserts the new one.
+     */
+    private function replace(array $values): void
+    {
+        $this->run('DELETE FROM user_sessions WHERE user_id = :user_id', ['user_id' => $values['user_id']]);
         $this->run(
             'INSERT INTO user_sessions ' .
             '(user_id, token_hash, expires_at, absolute_expires_at, last_used_at, ip_address, user_agent, created_at) ' .
             'VALUES (:user_id, :token_hash, FROM_UNIXTIME(:expires_at), FROM_UNIXTIME(:absolute_expires_at), ' .
-            'CURRENT_TIMESTAMP, :ip_address, :user_agent, CURRENT_TIMESTAMP) ' .
-            'ON DUPLICATE KEY UPDATE token_hash = VALUES(token_hash), expires_at = VALUES(expires_at), ' .
-            'absolute_expires_at = VALUES(absolute_expires_at), last_used_at = VALUES(last_used_at), ' .
-            'ip_address = VALUES(ip_address), user_agent = VALUES(user_agent), created_at = VALUES(created_at)',
-            [
-                'user_id' => (int)$userId,
-                'token_hash' => SessionToken::hash($token),
-                'expires_at' => $expiresAt,
-                'absolute_expires_at' => $absoluteExpiresAt,
-                'ip_address' => $ipAddress,
-                'user_agent' => $userAgent === null ? null : substr($userAgent, 0, 500),
-            ],
+            'CURRENT_TIMESTAMP, :ip_address, :user_agent, CURRENT_TIMESTAMP)',
+            $values,
         );
-
-        return ['token' => $token, 'expires_at' => $expiresAt, 'absolute_expires_at' => $absoluteExpiresAt];
     }
 
     /**
@@ -117,8 +139,7 @@ final class UserSession extends Model
 
     public function deleteExpired(): int
     {
-        return $this->run(
-            'DELETE FROM user_sessions WHERE expires_at <= CURRENT_TIMESTAMP OR absolute_expires_at <= CURRENT_TIMESTAMP'
-        )->rowCount();
+        // expires_at is always capped at absolute_expires_at, so this one indexed condition covers both limits.
+        return $this->run('DELETE FROM user_sessions WHERE expires_at <= CURRENT_TIMESTAMP')->rowCount();
     }
 }

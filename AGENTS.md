@@ -36,7 +36,7 @@ This project intentionally has no Composer dependencies. Prefer core PHP and exi
 - Keep methods focused and names descriptive.
 - Use PDO prepared statements for dynamic values.
 - Never expose credentials, tokens, absolute paths, or internal exceptions.
-- Add comments only for non-obvious decisions.
+- Give every function a docblock describing what it does; add inline comments only for non-obvious decisions.
 
 ## HTTP conventions
 

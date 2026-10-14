@@ -219,6 +219,7 @@ The migration runner creates its tracking table when it first migrates or rolls 
 | `src/Logging/ErrorLogger.php` | Records unexpected exceptions with their request ID in `storage/logs/errors-Y-m-d.log`. |
 | `src/Logging/Redactor.php` | Decides which keys are sensitive and replaces their values; shared by the request log and the debugger. |
 | `src/Logging/LogFiles.php` | Reads log files backwards in fixed-size chunks, counts lines without loading the file, and deletes dated logs past the retention period. |
+| `src/Support/UTF8.php` | Repairs invalid UTF-8 and shortens text without splitting a character, for storing client-supplied values such as the User-Agent in MySQL. |
 | `src/Mail/SMTPMailer.php` | Sends HTML or plain-text email directly through a configured SMTP server. Handles server replies, authentication, encryption, and message formatting without an external package. |
 | `src/Mail/MailException.php` | Defines the error type for email configuration and delivery failures. |
 | `src/Storage/FileUploader.php` | Checks uploaded files, size, extension, and detected content type before saving them under generated filenames. Supports multiple uploads and limits deletion to files inside the upload directory. |
