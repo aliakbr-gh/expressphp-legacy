@@ -140,7 +140,7 @@ Keep application migrations at the project root. The reusable code that runs the
 | File | What it contains and does |
 |---|---|
 | `src/bootstrap.php` | Registers the class loader for `App\` and `ExpressPHP\`, records when execution started, and loads the helper functions. This lets PHP find class files without Composer. |
-| `src/helpers.php` | Defines `dd()`, the shortcut for displaying debug values and stopping execution. It sends those values to `Debugger`. |
+| `src/helpers.php` | Global helper functions: `dd()` dumps values and stops the request; `utf8_scrub()` repairs invalid UTF-8 and `utf8_truncate()` shortens text without splitting a character, for storing client-supplied text such as the User-Agent in MySQL. |
 | `src/Core/Config.php` | Read-only access to the configuration by dot path. The router passes it to controller and middleware constructor parameters typed `Config`. |
 | `src/Core/ErrorHandler.php` | Turns off PHP error display, converts warnings into exceptions, and records fatal errors in the private error log. |
 | `src/Core/Application.php` | Connects the configured framework tools and provides route registration methods. Handles requests through CORS, rate limiting, and routing; adds security headers; turns failures into responses; and writes request logs after sending the response. |
@@ -217,7 +217,6 @@ The migration runner creates its tracking table when it first migrates or rolls 
 | `src/Logging/ErrorLogger.php` | Records unexpected exceptions with their request ID in `storage/logs/errors-Y-m-d.log`. |
 | `src/Logging/Redactor.php` | Decides which keys are sensitive and replaces their values; shared by the request log and the debugger. |
 | `src/Logging/LogFiles.php` | Reads log files backwards in fixed-size chunks, counts lines without loading the file, and deletes dated logs past the retention period. |
-| `src/Support/UTF8.php` | Repairs invalid UTF-8 and shortens text without splitting a character, for storing client-supplied values such as the User-Agent in MySQL. |
 | `src/Mail/SMTPMailer.php` | Sends HTML or plain-text email directly through a configured SMTP server. Handles server replies, authentication, encryption, and message formatting without an external package. |
 | `src/Mail/MailException.php` | Defines the error type for email configuration and delivery failures. |
 | `src/Storage/FileUploader.php` | Checks uploaded files, size, extension, and detected content type before saving them under generated filenames. Supports multiple uploads and limits deletion to files inside the upload directory. |

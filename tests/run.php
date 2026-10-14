@@ -22,7 +22,6 @@ use ExpressPHP\Logging\RequestLogger;
 use ExpressPHP\Mail\SMTPMailer;
 use ExpressPHP\RateLimit\RateLimiter;
 use ExpressPHP\Storage\FileUploader;
-use ExpressPHP\Support\UTF8;
 use ExpressPHP\Validation\ValidationException;
 use ExpressPHP\Validation\Validator;
 
@@ -362,13 +361,13 @@ test('request-time pruning examines at most the batch size', function () use ($w
 });
 
 // UTF-8 storage helpers
-test('UTF8 repairs invalid bytes and truncates on character boundaries', function () {
-    expect(UTF8::scrub("ok\xC3") === "ok\u{FFFD}");
-    expect(UTF8::scrub('سلام') === 'سلام');
-    $cut = UTF8::truncate(str_repeat('a', 499) . 'é', 500);
+test('utf8 helpers repair invalid bytes and truncate on character boundaries', function () {
+    expect(utf8_scrub("ok\xC3") === "ok\u{FFFD}");
+    expect(utf8_scrub('سلام') === 'سلام');
+    $cut = utf8_truncate(str_repeat('a', 499) . 'é', 500);
     expect(strlen($cut) === 499 && preg_match('//u', $cut) === 1, (string)strlen($cut));
-    expect(UTF8::truncate('😀😀', 5) === '😀');
-    expect(UTF8::truncate('short', 500) === 'short');
+    expect(utf8_truncate('😀😀', 5) === '😀');
+    expect(utf8_truncate('short', 500) === 'short');
 });
 
 // Errors and logging

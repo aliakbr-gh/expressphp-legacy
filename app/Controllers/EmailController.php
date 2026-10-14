@@ -12,7 +12,6 @@ use ExpressPHP\Http\Request;
 use ExpressPHP\Http\Response;
 use ExpressPHP\Mail\MailException;
 use ExpressPHP\Mail\SMTPMailer;
-use ExpressPHP\Support\UTF8;
 
 final class EmailController
 {
@@ -97,7 +96,7 @@ final class EmailController
                 'recipient' => $data['to'],
                 'subject' => $data['subject'],
                 'status' => 'failed',
-                'error_message' => UTF8::truncate($exception->getMessage(), 2000),
+                'error_message' => utf8_truncate($exception->getMessage(), 2000),
                 'sent_at' => null,
             ]);
             return $response->error('Email delivery failed', 502);
