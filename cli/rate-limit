@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-use ExpressPHP\RateLimit\RateLimiter;
+use ExpressPHP\Http\RateLimiter;
 
 if (PHP_SAPI !== 'cli') {
     http_response_code(404);

@@ -6,7 +6,6 @@ namespace ExpressPHP\Http;
 
 use Closure;
 use ExpressPHP\Validation\ValidationException;
-use ExpressPHP\View\View;
 use InvalidArgumentException;
 use RuntimeException;
 

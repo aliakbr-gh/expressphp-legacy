@@ -20,7 +20,7 @@ use ExpressPHP\Logging\LogFiles;
 use ExpressPHP\Logging\Redactor;
 use ExpressPHP\Logging\RequestLogger;
 use ExpressPHP\Mail\SMTPMailer;
-use ExpressPHP\RateLimit\RateLimiter;
+use ExpressPHP\Http\RateLimiter;
 use ExpressPHP\Storage\FileUploader;
 use ExpressPHP\Validation\ValidationException;
 use ExpressPHP\Validation\Validator;

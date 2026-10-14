@@ -2,12 +2,10 @@
 
 declare(strict_types=1);
 
-namespace ExpressPHP\Routing;
+namespace ExpressPHP\Http;
 
 use ExpressPHP\Core\Config;
 use ExpressPHP\Core\Debugger;
-use ExpressPHP\Http\Request;
-use ExpressPHP\Http\Response;
 use ReflectionClass;
 use ReflectionNamedType;
 use RuntimeException;

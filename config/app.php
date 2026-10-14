@@ -2,7 +2,8 @@
 
 declare(strict_types=1);
 
-$config = [
+// Settings only; Config::validate() checks them and stops startup with a clear message when one is unsafe.
+return ExpressPHP\Core\Config::validate([
     // Application identity, timezone, and environment.
     'name' => 'ExpressPHP',
     'timezone' => 'Asia/Karachi',
@@ -207,62 +208,4 @@ $config = [
         'credentials' => false,
         'max_age' => 86400,
     ],
-];
-
-// Checks run inside a closure so that requiring this file defines no variables in the caller's scope;
-// CLI scripts and the front controller only receive the returned array.
-return (static function (array $config): array {
-    // Debug output follows the single debug switch above.
-    $config['debug_dump']['enabled'] = $config['debug'];
-
-    try {
-        new DateTimeZone($config['timezone']);
-    } catch (Exception) {
-        throw new RuntimeException('config/app.php: timezone must be a valid PHP time zone identifier.');
-    }
-
-    if ($config['env'] === 'production') {
-        if ($config['debug']) {
-            throw new RuntimeException('config/app.php: debug must be false in production.');
-        }
-        if (!$config['force_https']) {
-            throw new RuntimeException('config/app.php: force_https must be true in production.');
-        }
-    }
-
-    // 64 characters is the hex form of 32 random bytes; shorter values do not carry 32 bytes of entropy.
-    $config['jwt']['secret'] = trim((string)$config['jwt']['secret']);
-    if (strlen($config['jwt']['secret']) < 64) {
-        throw new RuntimeException('config/app.php: jwt.secret must be at least 64 characters, such as bin2hex(random_bytes(32)).');
-    }
-
-    foreach ($config['trusted_proxies'] as $proxy) {
-        if (!is_string($proxy) || !ExpressPHP\Http\IPAddress::validRange($proxy)) {
-            throw new RuntimeException('config/app.php: trusted_proxies must contain IP addresses or CIDR ranges.');
-        }
-    }
-
-    $origins = $config['cors']['origins'];
-    if ($config['cors']['enabled'] && ($origins === [] || array_filter(
-        $origins,
-        static fn(string $origin): bool => in_array(trim($origin), ['', '*'], true),
-    ) !== [])) {
-        throw new RuntimeException('config/app.php: cors.origins must list explicit origins when CORS is enabled.');
-    }
-
-    $connection = $config['databases']['connections'][$config['databases']['default']] ?? null;
-    if (!is_array($connection)) {
-        throw new RuntimeException('config/app.php: the default database connection must be configured.');
-    }
-    $required = ['host', 'database', 'username'];
-    if ($config['env'] === 'production') {
-        $required[] = 'password';
-    }
-    foreach ($required as $key) {
-        if (trim((string)($connection[$key] ?? '')) === '') {
-            throw new RuntimeException('config/app.php: the default database requires ' . $key . '.');
-        }
-    }
-
-    return $config;
-})($config);
+]);

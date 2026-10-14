@@ -6,9 +6,9 @@ namespace App\Middlewares;
 
 use ExpressPHP\Core\Config;
 use ExpressPHP\Http\Request;
+use ExpressPHP\Http\RateLimiter;
 use ExpressPHP\Http\Response;
 use ExpressPHP\Logging\ErrorLogger;
-use ExpressPHP\RateLimit\RateLimiter;
 use RuntimeException;
 use Throwable;
 

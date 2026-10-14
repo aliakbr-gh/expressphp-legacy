@@ -1,7 +1,1 @@
 /.env
-/storage/logs/*.log
-/storage/rate-limiter/*
-/storage/uploads/*
-!/storage/uploads/.gitignore
-/storage/backups/*
-!/storage/backups/.gitignore

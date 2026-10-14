@@ -32,7 +32,7 @@ $paths = [
     '/app/Models/User.php',
     '/routes/api.php',
     '/migrations/',
-    '/cli/migrate.php',
+    '/cli/migrate',
     '/storage/logs/',
     "/storage/logs/{$today}.log",
     "/storage/logs/{$yesterday}.log",

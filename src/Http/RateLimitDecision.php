@@ -2,9 +2,8 @@
 
 declare(strict_types=1);
 
-namespace ExpressPHP\RateLimit;
+namespace ExpressPHP\Http;
 
-use ExpressPHP\Http\Response;
 
 final class RateLimitDecision
 {

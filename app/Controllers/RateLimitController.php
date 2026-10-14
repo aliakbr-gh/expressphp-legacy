@@ -9,7 +9,7 @@ use ExpressPHP\Core\Config;
 use ExpressPHP\Http\Pagination;
 use ExpressPHP\Http\Request;
 use ExpressPHP\Http\Response;
-use ExpressPHP\RateLimit\RateLimiter;
+use ExpressPHP\Http\RateLimiter;
 
 final class RateLimitController
 {

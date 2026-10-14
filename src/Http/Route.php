@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace ExpressPHP\Routing;
+namespace ExpressPHP\Http;
 
 final class Route
 {

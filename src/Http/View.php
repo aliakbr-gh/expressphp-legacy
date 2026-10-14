@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace ExpressPHP\View;
+namespace ExpressPHP\Http;
 
 use InvalidArgumentException;
 use RuntimeException;

@@ -15,7 +15,7 @@ use App\Controllers\RoleController;
 use App\Controllers\RateLimitController;
 use App\Controllers\ServerLogController;
 use App\Controllers\UserController;
-use ExpressPHP\Routing\Router;
+use ExpressPHP\Http\Router;
 
 return static function (Application $app): void {
     $appName = (string)$app->config('name', 'App');

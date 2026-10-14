@@ -2,10 +2,8 @@
 
 declare(strict_types=1);
 
-namespace ExpressPHP\RateLimit;
+namespace ExpressPHP\Http;
 
-use ExpressPHP\Http\IPAddress;
-use ExpressPHP\Http\Request;
 use JsonException;
 use RuntimeException;
 use Throwable;
