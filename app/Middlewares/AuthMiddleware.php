@@ -29,9 +29,17 @@ final class AuthMiddleware
             return $this->unauthorized($response);
         }
 
+        if (!is_string($claims['sub'] ?? null) || !is_string($claims['pwd'] ?? null)) {
+            return $this->unauthorized($response);
+        }
+
         // The user is reloaded on every request, so a deactivated or deleted account is refused immediately,
-        // and role and permission changes apply without a new token.
-        $user = $this->users->findDetailed($claims['sub']);
+        // and role and permission changes apply without a new token. A token made before the latest password
+        // change carries an old fingerprint and is refused.
+        $fingerprint = $this->users->passwordFingerprint($claims['sub']);
+        $user = $fingerprint !== null && hash_equals($fingerprint, $claims['pwd'])
+            ? $this->users->findDetailed($claims['sub'])
+            : null;
         if ($user === null || !(bool)($user['is_active'] ?? false)) {
             return $this->unauthorized($response);
         }

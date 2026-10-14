@@ -48,6 +48,16 @@ final class User extends Model
         return $user === false ? null : $this->withPermissions($user);
     }
 
+    /**
+     * Returns a short fingerprint of the user's current password hash, or null when the user does not exist.
+     * Login tokens carry it, so changing the password makes every older token fail.
+     */
+    public function passwordFingerprint(int|string $id): ?string
+    {
+        $user = $this->rawFirstWhere('id', $id);
+        return $user === null ? null : substr(hash('sha256', (string)$user['password']), 0, 16);
+    }
+
     public function findByUsername(string $username): ?array
     {
         return $this->firstWhere('username', $username);

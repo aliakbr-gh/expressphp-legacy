@@ -10,7 +10,7 @@ See [PROJECT.md](PROJECT.md) for a simple guide to every file and how requests m
 ## Features
 
 - Versioned routing and middleware
-- JWT login tokens with Argon2id password hashing
+- JWT login tokens with bcrypt password hashing
 - Roles and permissions
 - Validation and pagination
 - PDO models and migrations
@@ -350,15 +350,11 @@ screen. Tokens last `jwt.ttl` seconds (7 days). The server keeps no session stat
 endpoint; logging out means the app deletes its token.
 
 Every authenticated request reloads the user, so deactivating or deleting an account refuses its token immediately,
-and role or permission changes apply without a new token. A copied token keeps working until it expires, so keep
-`jwt.ttl` as short as the app can tolerate and the `jwt.secret` private.
+and role or permission changes apply without a new token. Each token also carries a short fingerprint of the user's
+password hash, so changing the password signs out every older token. Changing `jwt.secret` signs out everyone.
 
-Passwords are hashed with Argon2id (OWASP's minimum settings, about 40–60 ms), so login and registration take
-milliseconds. PHP builds without Argon2 fall back to bcrypt. Hashes made earlier with bcrypt still verify and are
-upgraded to Argon2id at the user's next login.
-
-Tokens carry a `kid`: to rotate the signing key, move the
-current `kid` and `secret` into `jwt.previous_keys` and set a new `kid` and `secret`.
+Passwords are hashed with bcrypt (`password.bcrypt_cost`, default 10), which needs only a few kilobytes of memory per
+login. Hashes made with another cost or algorithm still verify and are replaced at the user's next login.
 
 ### Rate limits
 
@@ -510,7 +506,6 @@ php cli/rate-limit prune
 - Restrict `config/app.php` permissions to the owner and the PHP service account
 - Restrict `database-backups.download` to trusted administrators
 - Configure PHP request and upload limits
-- Check that the production PHP supports Argon2id (`php -r 'var_dump(defined("PASSWORD_ARGON2ID"));'`)
 - Hide the server version: `ServerTokens Prod` and `ServerSignature Off` in Apache (PHP's `X-Powered-By` is removed
   by the framework)
 - Configure SMTP sender authentication

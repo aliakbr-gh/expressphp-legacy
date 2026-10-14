@@ -92,7 +92,7 @@ Most models use a database table. `ServerLog.php` reads files instead.
 
 A user has one role, and a role has permissions such as `users.view`. The first registered user becomes `super-admin` when the users table is empty; later registrations receive the `user` role. Create that first account before allowing public access to a fresh installation.
 
-Login returns a signed JWT that lasts 7 days (`jwt.ttl`). The server keeps no session state: the app logs out by deleting its token, and deactivating or deleting a user refuses their token immediately because every request reloads the user.
+Login returns a signed JWT that lasts 7 days (`jwt.ttl`). The server keeps no session state: the app logs out by deleting its token. Every request reloads the user, so deactivating or deleting a user refuses their token immediately, and the token's password fingerprint makes a password change sign out older tokens.
 
 ## Application views
 
@@ -153,9 +153,9 @@ A JWT is a signed access token. The signature lets the server check that a token
 
 | File | What it contains and does |
 |---|---|
-| `src/Auth/JWT.php` | Creates signed JWTs and checks incoming tokens. Verifies the signature, timestamps, issuer, and audience. |
+| `src/Auth/JWT.php` | Creates HS256 JWTs with an issue time and expiry, and returns a token's claims only when its signature is valid and it has not expired. |
 | `src/Auth/JWTException.php` | Defines the error type for token creation and verification failures. It lets other code recognize a token-related failure. |
-| `src/Auth/Password.php` | Hashes passwords with Argon2id (bcrypt where Argon2 is unavailable), checks them, spends equal time on missing accounts, and reports older hashes that should be upgraded at login. |
+| `src/Auth/Password.php` | Hashes passwords with bcrypt, checks them, spends equal time on missing accounts, and reports hashes with another cost or algorithm so login can replace them. |
 
 ## Framework database tools
 

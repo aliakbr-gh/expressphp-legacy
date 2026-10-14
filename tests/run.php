@@ -103,7 +103,7 @@ final class ConfigProbeController
      */
     public function show(Request $request, Response $response): Response
     {
-        return $response->success($this->config->get('jwt.kid'));
+        return $response->success($this->config->get('jwt.ttl'));
     }
 }
 
@@ -176,7 +176,7 @@ test('empty middleware parameter and duplicate routes are rejected', function ()
 });
 test('controllers receive Config by constructor type', function () use ($app, $server) {
     $response = $app->dispatch(new Request('GET', '/config', server: $server()));
-    expect(json_decode($response->body(), true)['data'] === 'primary', $response->body());
+    expect(json_decode($response->body(), true)['data'] === 604800, $response->body());
 });
 test('HTTPS is enforced when configured', function () use ($config, $server) {
     $secure = new Application([...$config, 'force_https' => true]);
@@ -330,15 +330,17 @@ test('the string rule rejects invalid UTF-8 from query strings and forms', funct
     expect(isset($error->errors()['name']));
     expect((new Request('POST', '/', form: ['name' => 'سلام']))->validate(['name' => 'required|string']) === ['name' => 'سلام']);
 });
-test('passwords use Argon2id in milliseconds; bcrypt hashes still verify and get upgraded', function () {
+test('passwords use bcrypt; other costs and algorithms still verify and get replaced', function () {
     Password::configure([]);
-    $started = microtime(true);
     $hash = Password::hash('real-password');
-    $elapsed = microtime(true) - $started;
-    expect(str_starts_with($hash, '$argon2id$') && $elapsed < 0.5, round($elapsed * 1000) . ' ms');
+    expect(str_starts_with($hash, '$2y$10$'), $hash);
     expect(Password::verify('real-password', $hash) && !Password::verify('wrong', $hash) && !Password::needsRehash($hash));
-    $legacy = password_hash('old-password', PASSWORD_BCRYPT, ['cost' => 4]);
-    expect(Password::verify('old-password', $legacy) && Password::needsRehash($legacy));
+    $old = password_hash('old-password', PASSWORD_BCRYPT, ['cost' => 4]);
+    expect(Password::verify('old-password', $old) && Password::needsRehash($old));
+    if (defined('PASSWORD_ARGON2ID')) {
+        $argon = password_hash('argon-password', PASSWORD_ARGON2ID);
+        expect(Password::verify('argon-password', $argon) && Password::needsRehash($argon));
+    }
 });
 test('a missing account costs the same hashing time as a real one', function () {
     Password::configure([]);
@@ -436,17 +438,23 @@ test('required_if compares the normalized referenced value', function () {
 });
 
 // Authentication
-test('JWT carries kid, survives rotation, rejects tampering and bad claim types', function () use ($config) {
+test('JWT round-trips, and rejects tampered, wrongly signed, and expired tokens', function () use ($config) {
     JWT::configure($config['jwt']);
-    $token = JWT::encode(['sub' => '1', 'sv' => 1]);
-    expect(JWT::decode($token)['sub'] === '1');
-    JWT::configure([...$config['jwt'], 'kid' => 'next', 'secret' => str_repeat('b', 64), 'previous_keys' => ['primary' => $config['jwt']['secret']]]);
-    expect(JWT::decode($token)['sub'] === '1');
-    $parts = explode('.', $token);
-    $parts[1] = rtrim(strtr(base64_encode('{"x":1}'), '+/', '-_'), '=');
-    expect(expectThrows(JWTException::class, fn() => JWT::decode(implode('.', $parts)))->getMessage() === 'Invalid JWT signature.');
-    expectThrows(JWTException::class, fn() => JWT::decode(JWT::encode(['sub' => ['1'], 'sv' => 1])));
+    $token = JWT::encode(['sub' => '1', 'pwd' => 'abc']);
+    $claims = JWT::decode($token);
+    expect($claims['sub'] === '1' && $claims['pwd'] === 'abc' && $claims['exp'] === $claims['iat'] + 604800);
+    [$header, $body, $signature] = explode('.', $token);
+    $forged = rtrim(strtr(base64_encode('{"sub":"2","pwd":"abc","iat":1,"exp":9999999999}'), '+/', '-_'), '=');
+    expectThrows(JWTException::class, fn() => JWT::decode("$header.$forged.$signature"));
+    $none = rtrim(strtr(base64_encode('{"alg":"none","typ":"JWT"}'), '+/', '-_'), '=');
+    expectThrows(JWTException::class, fn() => JWT::decode("$none.$body."));
+    expectThrows(JWTException::class, fn() => JWT::decode('not-a-token'));
+    JWT::configure([...$config['jwt'], 'secret' => str_repeat('b', 64)]);
+    expectThrows(JWTException::class, fn() => JWT::decode($token));
     JWT::configure($config['jwt']);
+    $short = JWT::encode(['sub' => '1'], 1);
+    sleep(2);
+    expectThrows(JWTException::class, fn() => JWT::decode($short));
 });
 test('NUL bytes in passwords are rejected as invalid input', function () {
     expectThrows(ValidationException::class, fn() => Password::hash("abcdefgh\0"));

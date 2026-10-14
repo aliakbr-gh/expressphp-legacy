@@ -49,7 +49,11 @@ final class AuthController
         }
 
         // A signed token the app stores and sends as "Authorization: Bearer <token>" until it gets a 401.
-        $token = JWT::encode(['sub' => (string)$user['id']]);
+        // "pwd" ties the token to the current password, so changing the password signs out old tokens.
+        $token = JWT::encode([
+            'sub' => (string)$user['id'],
+            'pwd' => $this->users->passwordFingerprint($user['id']),
+        ]);
 
         return $response->success([
             'user' => $user,

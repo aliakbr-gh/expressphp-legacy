@@ -62,25 +62,17 @@ $config = [
         'path' => dirname(__DIR__) . '/storage/backups',
     ],
 
-    // Authentication tokens; generate the secret with: php -r 'echo bin2hex(random_bytes(32)), PHP_EOL;'
-    // To rotate, move the current kid and secret into previous_keys, then set a new kid and secret.
+    // Login tokens (HS256 JWT). Generate the secret with: php -r 'echo bin2hex(random_bytes(32)), PHP_EOL;'
+    // Changing the secret signs everyone out.
     'jwt' => [
         'secret' => '6dfa86541dd7fb8558426c9a0d4583337ac251dc3ec1f4bf3c8963ef4dc4a90c',
-        'kid' => 'primary',
-        'previous_keys' => [],
-        'issuer' => 'expressphp',
-        'audience' => 'expressphp-api',
-        // Login tokens last this many seconds; the app logs out when it receives 401.
+        // Tokens last this many seconds (7 days); the app logs out when it receives 401.
         'ttl' => 604800,
-        'leeway' => 5,
     ],
 
-    // Password hashing: Argon2id with OWASP's minimum settings, about 40-60 ms per hash. bcrypt_cost is used only
-    // on PHP builds without Argon2. Existing hashes made with other settings are upgraded at the next login.
+    // bcrypt password hashing; a few kilobytes of memory per hash. Each +1 doubles the time (10 is about
+    // 50-150 ms on a typical server). Hashes made with another cost are replaced at the user's next login.
     'password' => [
-        'memory_cost' => 19456, // KiB
-        'time_cost' => 2,
-        'threads' => 1,
         'bcrypt_cost' => 10,
     ],
 
@@ -239,17 +231,10 @@ return (static function (array $config): array {
     }
 
     // 64 characters is the hex form of 32 random bytes; shorter values do not carry 32 bytes of entropy.
-    $secrets = [$config['jwt']['secret'], ...array_values($config['jwt']['previous_keys'])];
-    foreach ($secrets as $secret) {
-        $secret = trim((string)$secret);
-        if (strlen($secret) < 64 || in_array($secret, [
-            'expressphp-development-secret-change-this-before-production-2026',
-            'change-this-to-a-random-secret-with-at-least-32-bytes',
-        ], true)) {
-            throw new RuntimeException('config/app.php: jwt secrets must be at least 64 characters, such as bin2hex(random_bytes(32)).');
-        }
+    $config['jwt']['secret'] = trim((string)$config['jwt']['secret']);
+    if (strlen($config['jwt']['secret']) < 64) {
+        throw new RuntimeException('config/app.php: jwt.secret must be at least 64 characters, such as bin2hex(random_bytes(32)).');
     }
-    $config['jwt']['secret'] = trim($config['jwt']['secret']);
 
     foreach ($config['trusted_proxies'] as $proxy) {
         if (!is_string($proxy) || !ExpressPHP\Http\IPAddress::validRange($proxy)) {
