@@ -22,13 +22,13 @@ use Throwable;
  */
 final class RateLimiter
 {
-    private const CLEANUP_CHANCE = 100;
-
     private readonly bool $enabled;
     private readonly int $maxRequests;
     private readonly int $windowSeconds;
     private readonly int $IPv6Prefix;
     private readonly int $recordTTLSeconds;
+    private readonly int $pruneChance;
+    private readonly int $pruneBatch;
     private readonly string $path;
     private readonly array $except;
     private readonly array $failClosed;
@@ -43,6 +43,8 @@ final class RateLimiter
         $this->windowSeconds = max(1, (int)($config['window_seconds'] ?? 60));
         $this->IPv6Prefix = max(1, min(128, (int)($config['ipv6_prefix'] ?? 64)));
         $this->recordTTLSeconds = max(60, (int)($config['record_ttl_seconds'] ?? 86400));
+        $this->pruneChance = max(0, (int)($config['prune_chance'] ?? 100));
+        $this->pruneBatch = max(1, (int)($config['prune_batch'] ?? 2000));
         $this->path = rtrim((string)($config['path'] ?? dirname(__DIR__, 2) . '/storage/rate-limiter'), '/');
         $this->except = is_array($config['except'] ?? null) ? $config['except'] : [];
         $this->failClosed = is_array($config['fail_closed'] ?? null) ? $config['fail_closed'] : [];
@@ -68,8 +70,9 @@ final class RateLimiter
 
         try {
             $this->ensureDirectories();
-            if (random_int(1, self::CLEANUP_CHANCE) === 1) {
-                $this->prune();
+            // Pruning during a request is bounded, so the unlucky request never walks a huge directory.
+            if ($this->pruneChance > 0 && random_int(1, $this->pruneChance) === 1) {
+                $this->prune($this->pruneBatch);
             }
             if ($this->isBlocked($request->ip())) {
                 return new RateLimitDecision(false, true, $this->maxRequests, 0, 0);
@@ -228,10 +231,11 @@ final class RateLimiter
     }
 
     /**
-     * Deletes counters not used within record_ttl_seconds and returns how many were removed.
-     * Manual blocks are kept. Runs automatically on about 1% of requests and from `php cli/rate-limit prune`.
+     * Deletes counters not used within record_ttl_seconds and returns how many were removed. Manual blocks are
+     * kept. With $limit, at most that many files are examined, so the work done inside a request stays small;
+     * `php cli/rate-limit prune` passes no limit and cleans everything.
      */
-    public function prune(): int
+    public function prune(int $limit = 0): int
     {
         $this->ensureDirectories();
         $lockFile = $this->path . '/prune.lock';
@@ -249,10 +253,21 @@ final class RateLimiter
             return 0;
         }
 
+        $directory = @opendir($this->path . '/counters');
         try {
+            if ($directory === false) {
+                return 0;
+            }
             $cutoff = time() - $this->recordTTLSeconds;
             $removed = 0;
-            foreach (glob($this->path . '/counters/*.json') ?: [] as $file) {
+            $examined = 0;
+            // readdir() streams entries one at a time, unlike glob(), which builds the whole list in memory.
+            while (($entry = readdir($directory)) !== false && ($limit === 0 || $examined < $limit)) {
+                if (!str_ends_with($entry, '.json')) {
+                    continue;
+                }
+                $examined++;
+                $file = $this->path . '/counters/' . $entry;
                 $modified = @filemtime($file);
                 if ($modified !== false && $modified < $cutoff && @unlink($file)) {
                     $removed++;
@@ -260,6 +275,9 @@ final class RateLimiter
             }
             return $removed;
         } finally {
+            if ($directory !== false) {
+                closedir($directory);
+            }
             flock($lock, LOCK_UN);
             fclose($lock);
         }

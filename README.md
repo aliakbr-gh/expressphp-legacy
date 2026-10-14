@@ -10,11 +10,11 @@ See [PROJECT.md](PROJECT.md) for a simple guide to every file and how requests m
 ## Features
 
 - Versioned routing and middleware
-- Database-backed login sessions (one device per user, sliding expiry)
+- JWT login tokens with Argon2id password hashing
 - Roles and permissions
 - Validation and pagination
 - PDO models and migrations
-- Per-client, per-user, and per-username rate limits, plus manual IP blocking
+- Per-client and per-user rate limits, plus manual IP blocking
 - Activity logs and daily request logs
 - Server and database health checks
 - SMTP and Gmail email
@@ -222,7 +222,8 @@ $data = $request->validate([
 ```
 
 Use `array` for any PHP array, `object` for a JSON object, and `list` for a sequential
-JSON array. Nested object fields use dot notation, such as `profile.timezone`.
+JSON array. `string` also requires valid UTF-8, because query strings and form bodies can carry bytes that MySQL
+refuses to store. Nested object fields use dot notation, such as `profile.timezone`.
 
 Supported validation rules:
 
@@ -325,39 +326,38 @@ GET /api/v1/users?limit=20&offset=0
 POST /api/v1/auth/register
 POST /api/v1/auth/login
 GET  /api/v1/auth/me
-POST /api/v1/auth/logout
 ```
 
-Login returns a random session token. Send it with every protected request:
+Register creates the user. Login checks the password and returns a signed JWT:
+
+```json
+{
+  "user": { "id": 1, "username": "owner", "role_slug": "super-admin", "permissions": [] },
+  "token": "eyJ0eXAiOiJKV1Qi...",
+  "token_type": "Bearer",
+  "expires_at": "2026-10-21T12:00:00Z"
+}
+```
+
+The app stores the token and sends it with every protected request:
 
 ```http
 Authorization: Bearer <token>
 ```
 
-```json
-{
-  "user": { "id": 1, "username": "owner", "role_slug": "super-admin", "permissions": [] },
-  "token": "64 hexadecimal characters",
-  "token_type": "Bearer",
-  "expires_at": "2026-10-21T12:00:00Z",
-  "absolute_expires_at": "2027-01-12T12:00:00Z"
-}
-```
+When any request returns 401, the token is missing, invalid, or expired: the app deletes it and shows the login
+screen. Tokens last `jwt.ttl` seconds (7 days). The server keeps no session state, so there is no logout or refresh
+endpoint; logging out means the app deletes its token.
 
-Sessions are stored in `user_sessions`, which keeps only a SHA-256 hash of each token:
+Every authenticated request reloads the user, so deactivating or deleting an account refuses its token immediately,
+and role or permission changes apply without a new token. A copied token keeps working until it expires, so keep
+`jwt.ttl` as short as the app can tolerate and the `jwt.secret` private.
 
-- **One device per user.** Logging in replaces the previous session, so the other device gets 401 on its next request.
-- **Sliding expiry.** A session ends after `auth.session_idle_seconds` without use (7 days). Each use extends it again,
-  but never past `auth.session_lifetime_seconds` after login (90 days). The expiry is written at most once per
-  `auth.session_touch_seconds` (1 hour), not on every request.
-- **Ending a session.** Logout deletes the session, and so do a password change or deactivation by an administrator.
-  Deleting a user deletes their session. A role change applies immediately without signing out, because permissions
-  are loaded on every request.
-- **Expired sessions** are rejected and deleted when presented, and all expired rows are removed at each login.
+Passwords are hashed with Argon2id (OWASP's minimum settings, about 40–60 ms), so login and registration take
+milliseconds. PHP builds without Argon2 fall back to bcrypt. Hashes made earlier with bcrypt still verify and are
+upgraded to Argon2id at the user's next login.
 
-There is no refresh endpoint. When any request returns 401, the app shows the login screen.
-
-The `JWT` class remains available for other signed tokens. Tokens carry a `kid`: to rotate the signing key, move the
+Tokens carry a `kid`: to rotate the signing key, move the
 current `kid` and `secret` into `jwt.previous_keys` and set a new `kid` and `secret`.
 
 ### Rate limits
@@ -365,19 +365,12 @@ current `kid` and `secret` into `jwt.previous_keys` and set a new `kid` and `sec
 - **Every client:** `rate_limiter.max_requests` per `window_seconds` (600 per minute) for each IPv4 address or IPv6 /64
   network. This is generous because mobile carriers put many phones behind one IPv4 address.
 - **Each signed-in user:** add `throttle:<max>,<seconds>` after `auth`, for example `['auth', 'throttle:120,60']`.
-- **Login:** failures are counted against the account id, so every spelling the database treats as the same username
-  (`akbar`, `ÁKBÁR`) shares one count:
-  - `login_max_attempts` failures per account and client network within `login_window_seconds` (5 per 15 minutes),
-    so an attacker locks out only their own network;
-  - `login_account_max_attempts` failures per account from all networks within `login_account_window_seconds`
-    (50 per hour), against guessing from many networks;
-  - for usernames that don't exist, `login_max_attempts` failures per client network.
-
-  A successful login resets that client's count.
 
 A limited request gets 429 with `Retry-After` and `data.retry_after` in seconds. Manually blocked addresses get 403
-until cleared; blocking an IPv6 address blocks its whole /64 network. Unused counters are deleted after `record_ttl_seconds`, automatically and with
-`php cli/rate-limit prune`. Counters are stored per server; with several servers behind a load balancer, each keeps
+until cleared; blocking an IPv6 address blocks its whole /64 network. Unused counters are deleted after
+`record_ttl_seconds`: about one request in `prune_chance` examines up to `prune_batch` counter files, and
+`php cli/rate-limit prune` cleans everything. Set `prune_chance` to `0` and run the command from cron to keep pruning
+out of requests entirely. Counters are stored per server; with several servers behind a load balancer, each keeps
 its own.
 
 ```php
@@ -472,7 +465,19 @@ executable and markup extensions such as `php`, `html`, and `svg` are always rej
 replaces the global per-extension map. `uploadMany()` removes already stored files if any file fails.
 
 Serve stored files with `$response->sendFile($path, $downloadName)`. The type comes from the extension, never from the
-file contents, and the response is a sandboxed attachment unless `inline: true` is passed.
+file contents, and the response is a sandboxed attachment unless `inline: true` is passed. When the path comes from a
+client, resolve it first; `path()` returns null for anything outside the upload directory, such as `../../config/app.php`:
+
+```php
+$path = $this->uploads->path($data['file']);
+if ($path === null) {
+    return $response->error('File not found', 404);
+}
+return $response->sendFile($path, basename($path));
+```
+
+`$response->redirect('/dashboard')` accepts only paths on this site. Redirecting to another host requires
+`redirect($url, allowExternal: true)`; never pass a client-supplied URL that way.
 
 ## Commands
 
@@ -505,6 +510,9 @@ php cli/rate-limit prune
 - Restrict `config/app.php` permissions to the owner and the PHP service account
 - Restrict `database-backups.download` to trusted administrators
 - Configure PHP request and upload limits
+- Check that the production PHP supports Argon2id (`php -r 'var_dump(defined("PASSWORD_ARGON2ID"));'`)
+- Hide the server version: `ServerTokens Prod` and `ServerSignature Off` in Apache (PHP's `X-Powered-By` is removed
+  by the framework)
 - Configure SMTP sender authentication
 - Monitor health checks and logs
 

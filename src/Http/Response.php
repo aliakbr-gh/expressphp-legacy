@@ -211,10 +211,15 @@ final class Response
     }
 
     /**
-     * Redirects to a URL. Callers must make sure the URL is trusted.
+     * Redirects to a path on this site, such as "/dashboard". Pass $allowExternal = true for another host;
+     * never pass a client-supplied value that way, or the redirect can send users to an attacker's site.
      */
-    public function redirect(string $url, int $status = 302): self
+    public function redirect(string $url, int $status = 302, bool $allowExternal = false): self
     {
+        // "//host" and "/\\host" are treated by browsers as links to another host, so only "/path" passes.
+        if (!$allowExternal && preg_match('#\A/(?![/\\\\])#', $url) !== 1) {
+            throw new InvalidArgumentException('Redirects must target a path on this site, such as /dashboard.');
+        }
         return $this->status($status)->header('Location', $url)->html(
             '<!doctype html><title>Redirecting</title><a href="' . htmlspecialchars($url, ENT_QUOTES, 'UTF-8') . '">Redirecting</a>'
         );
@@ -348,6 +353,8 @@ final class Response
      */
     public function emit(bool $includeBody = true): void
     {
+        // Hide the PHP version that expose_php adds to every response.
+        header_remove('X-Powered-By');
         http_response_code($this->statusCode);
         foreach ($this->headers as $name => $value) {
             header($name . ': ' . $value);

@@ -58,12 +58,10 @@ final class User extends Model
         $user = $this->rawFirstWhere('username', $username);
         $hash = $user['password'] ?? null;
 
-        if (
-            $user === null
-            || !(bool)($user['is_active'] ?? false)
-            || !is_string($hash)
-            || !Password::verify($password, $hash)
-        ) {
+        // Exactly one bcrypt check runs on every path, and the password is checked before the active flag,
+        // so response time reveals neither whether the username exists nor whether the account is active.
+        $valid = is_string($hash) ? Password::verify($password, $hash) : Password::verifyMissing($password);
+        if ($user === null || !$valid || !(bool)($user['is_active'] ?? false)) {
             return null;
         }
 

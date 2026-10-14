@@ -41,12 +41,10 @@ $config = [
         'max_requests' => 600,
         'window_seconds' => 60,
         'ipv6_prefix' => 64,
-        // Failed logins allowed per account and client network before a 429, and per account from all
-        // networks together. Unknown usernames are counted per client network with the first limit.
-        'login_max_attempts' => 5,
-        'login_window_seconds' => 900,
-        'login_account_max_attempts' => 50,
-        'login_account_window_seconds' => 3600,
+        // About one request in this many prunes up to prune_batch unused counters; 0 leaves pruning to
+        // `php cli/rate-limit prune`, for example from cron.
+        'prune_chance' => 100,
+        'prune_batch' => 2000,
         // Unused counters are deleted after this long; manual IP blocks are kept until cleared.
         'record_ttl_seconds' => 86400,
         'path' => dirname(__DIR__) . '/storage/rate-limiter',
@@ -72,22 +70,18 @@ $config = [
         'previous_keys' => [],
         'issuer' => 'expressphp',
         'audience' => 'expressphp-api',
-        'ttl' => 86400,
+        // Login tokens last this many seconds; the app logs out when it receives 401.
+        'ttl' => 604800,
         'leeway' => 5,
     ],
 
-    // Login sessions: one per user (a new login signs out the previous device). Each request that uses the
-    // token pushes its expiry back to session_idle_seconds from now, but never past session_lifetime_seconds
-    // after login. The expiry is written at most once per session_touch_seconds.
-    'auth' => [
-        'session_idle_seconds' => 604800,      // 7 days without use
-        'session_lifetime_seconds' => 7776000, // 90 days after login, however active
-        'session_touch_seconds' => 3600,
-    ],
-
-    // Bcrypt password hashing.
+    // Password hashing: Argon2id with OWASP's minimum settings, about 40-60 ms per hash. bcrypt_cost is used only
+    // on PHP builds without Argon2. Existing hashes made with other settings are upgraded at the next login.
     'password' => [
-        'bcrypt_cost' => 12,
+        'memory_cost' => 19456, // KiB
+        'time_cost' => 2,
+        'threads' => 1,
+        'bcrypt_cost' => 10,
     ],
 
     // Outgoing email through named SMTP profiles.
@@ -256,13 +250,6 @@ return (static function (array $config): array {
         }
     }
     $config['jwt']['secret'] = trim($config['jwt']['secret']);
-
-    $idle = $config['auth']['session_idle_seconds'];
-    $lifetime = $config['auth']['session_lifetime_seconds'];
-    if (!is_int($idle) || !is_int($lifetime) || !is_int($config['auth']['session_touch_seconds'])
-        || $idle < 60 || $lifetime < $idle || $config['auth']['session_touch_seconds'] < 0) {
-        throw new RuntimeException('config/app.php: auth session times must be integers with 60 <= idle <= lifetime.');
-    }
 
     foreach ($config['trusted_proxies'] as $proxy) {
         if (!is_string($proxy) || !ExpressPHP\Http\IPAddress::validRange($proxy)) {

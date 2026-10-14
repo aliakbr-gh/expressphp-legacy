@@ -119,7 +119,6 @@ return static function (Application $app): void {
             $router->post('/register', [AuthController::class, 'register']);
             $router->post('/login', [AuthController::class, 'login']);
             $router->get('/me', [AuthController::class, 'me'], ['auth', 'throttle:120,60']);
-            $router->post('/logout', [AuthController::class, 'logout'], ['auth', 'throttle:120,60']);
         });
     });
 };

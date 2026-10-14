@@ -140,7 +140,8 @@ final class Validator
         array &$databaseCache,
     ): array {
         return match ($rule) {
-            'string' => [is_string($value), $value],
+            // Query strings and form bodies can carry invalid UTF-8, which strict MySQL refuses to store.
+            'string' => [is_string($value) && preg_match('//u', $value) === 1, $value],
             'integer' => self::integer($value),
             'numeric' => self::numeric($value),
             'boolean' => self::boolean($value),
@@ -681,7 +682,7 @@ final class Validator
     {
         return match ($rule) {
             'required', 'required_if', 'required_unless', 'required_with', 'required_without' => 'The :attribute field is required.',
-            'string' => 'The :attribute field must be a string.',
+            'string' => 'The :attribute field must be a valid UTF-8 string.',
             'integer' => 'The :attribute field must be an integer.',
             'numeric' => 'The :attribute field must be a finite number.',
             'boolean' => 'The :attribute field must be true or false.',

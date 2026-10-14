@@ -306,6 +306,59 @@ test('throttle middleware limits each signed-in user', function () use ($config,
     expect($limited->dispatch(new Request('GET', '/bad', server: $server()))->statusCode() === 500);
 });
 
+// Final review: redirects, upload paths, UTF-8 strings, constant-time missing accounts, bounded pruning
+test('redirect() allows only paths on this site unless told otherwise', function () {
+    expect((new Response())->redirect('/dashboard')->headers()['Location'] === '/dashboard');
+    foreach (['//evil.com', '/\\evil.com', 'https://evil.com', 'javascript:alert(1)', 'dashboard'] as $url) {
+        expectThrows(InvalidArgumentException::class, fn() => (new Response())->redirect($url));
+    }
+    expect((new Response())->redirect('https://example.com', allowExternal: true)->statusCode() === 302);
+});
+test('FileUploader::path() stays inside the upload directory', function () use ($workspace) {
+    mkdir($workspace . '/uploads/files', 0700, true);
+    file_put_contents($workspace . '/uploads/files/a.txt', 'x');
+    file_put_contents($workspace . '/secret.txt', 'x');
+    FileUploader::configure(['path' => $workspace . '/uploads']);
+    $uploads = new FileUploader();
+    expect($uploads->path('files/a.txt') === realpath($workspace . '/uploads/files/a.txt'));
+    foreach (['../secret.txt', 'files/../../secret.txt', '/../secret.txt', 'files', '', "files/a.txt\0"] as $path) {
+        expect($uploads->path($path) === null, $path);
+    }
+});
+test('the string rule rejects invalid UTF-8 from query strings and forms', function () {
+    $error = expectThrows(ValidationException::class, fn() => (new Request('GET', '/', query: ['name' => "a\xC3"]))->validate(['name' => 'required|string']));
+    expect(isset($error->errors()['name']));
+    expect((new Request('POST', '/', form: ['name' => 'سلام']))->validate(['name' => 'required|string']) === ['name' => 'سلام']);
+});
+test('passwords use Argon2id in milliseconds; bcrypt hashes still verify and get upgraded', function () {
+    Password::configure([]);
+    $started = microtime(true);
+    $hash = Password::hash('real-password');
+    $elapsed = microtime(true) - $started;
+    expect(str_starts_with($hash, '$argon2id$') && $elapsed < 0.5, round($elapsed * 1000) . ' ms');
+    expect(Password::verify('real-password', $hash) && !Password::verify('wrong', $hash) && !Password::needsRehash($hash));
+    $legacy = password_hash('old-password', PASSWORD_BCRYPT, ['cost' => 4]);
+    expect(Password::verify('old-password', $legacy) && Password::needsRehash($legacy));
+});
+test('a missing account costs the same hashing time as a real one', function () {
+    Password::configure([]);
+    $hash = Password::hash('real-password');
+    $time = function (callable $check): float { $started = microtime(true); $check(); return microtime(true) - $started; };
+    $real = $time(fn() => Password::verify('wrong', $hash));
+    $missing = $time(fn() => expect(Password::verifyMissing('wrong') === false));
+    expect($missing > $real * 0.5 && $missing < $real * 2, round($real * 1000) . ' ms vs ' . round($missing * 1000) . ' ms');
+});
+test('request-time pruning examines at most the batch size', function () use ($workspace) {
+    $limiter = new RateLimiter(['enabled' => true, 'path' => $workspace . '/prune-batch', 'record_ttl_seconds' => 60]);
+    foreach (range(1, 10) as $i) {
+        $limiter->hit("stale{$i}", 5, 60);
+    }
+    foreach (glob($workspace . '/prune-batch/counters/*.json') as $file) {
+        touch($file, time() - 3600);
+    }
+    expect($limiter->prune(3) === 3 && $limiter->prune() === 7);
+});
+
 // UTF-8 storage helpers
 test('UTF8 repairs invalid bytes and truncates on character boundaries', function () {
     expect(UTF8::scrub("ok\xC3") === "ok\u{FFFD}");

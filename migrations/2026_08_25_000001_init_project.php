@@ -55,25 +55,6 @@ return new class extends Migration {
             ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
         );
 
-        // One row per user: a new login replaces the previous device's session.
-        $database->exec(
-            'CREATE TABLE IF NOT EXISTS user_sessions (' .
-            'id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, ' .
-            'user_id BIGINT UNSIGNED NOT NULL, ' .
-            'token_hash CHAR(64) NOT NULL, ' .
-            'expires_at TIMESTAMP NOT NULL, ' .
-            'absolute_expires_at TIMESTAMP NOT NULL, ' .
-            'last_used_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, ' .
-            'ip_address VARCHAR(45) NULL, ' .
-            'user_agent VARCHAR(500) NULL, ' .
-            'created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, ' .
-            'UNIQUE KEY uq_user_sessions_user_id (user_id), ' .
-            'UNIQUE KEY uq_user_sessions_token_hash (token_hash), ' .
-            'INDEX idx_user_sessions_expires_at (expires_at), ' .
-            'CONSTRAINT fk_user_sessions_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE' .
-            ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
-        );
-
         $database->exec(
             'CREATE TABLE IF NOT EXISTS activity_logs (' .
             'id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, ' .
@@ -121,7 +102,6 @@ return new class extends Migration {
         $database->exec('DROP TABLE IF EXISTS email_logs');
         $database->exec('DROP TABLE IF EXISTS activity_logs');
         $database->exec('DROP TABLE IF EXISTS role_permissions');
-        $database->exec('DROP TABLE IF EXISTS user_sessions');
         $database->exec('DROP TABLE IF EXISTS users');
         $database->exec('DROP TABLE IF EXISTS permissions');
         $database->exec('DROP TABLE IF EXISTS roles');

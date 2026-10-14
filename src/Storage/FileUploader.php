@@ -98,6 +98,21 @@ final class FileUploader
     }
 
     /**
+     * Returns the absolute path of a stored upload, or null when the relative path does not resolve to a file
+     * inside the upload directory. Use this before Response::sendFile() whenever the path comes from a client,
+     * so values such as "../../config/app.php" cannot reach other files.
+     */
+    public function path(string $relativePath): ?string
+    {
+        if ($relativePath === '' || str_contains($relativePath, "\0")) {
+            return null;
+        }
+        $root = $this->root(self::$config);
+        $candidate = realpath($root . '/' . ltrim(str_replace('\\', '/', $relativePath), '/'));
+        return $candidate !== false && str_starts_with($candidate, $root . '/') && is_file($candidate) ? $candidate : null;
+    }
+
+    /**
      * Deletes a stored upload by relative path, but only when it resolves inside the upload directory.
      */
     public function delete(string $relativePath): bool

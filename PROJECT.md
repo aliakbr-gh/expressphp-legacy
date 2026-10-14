@@ -54,7 +54,7 @@ Controllers validate HTTP input, call a model or framework tool, and return a re
 | File | What it contains and does |
 |---|---|
 | `app/Controllers/ActivityLogController.php` | Lists activity records, shows one record, and accepts a new activity description. Supports a date filter and pagination. |
-| `app/Controllers/AuthController.php` | Handles registration, login, the current user, token refresh, and logout. Hashes registration passwords and invalidates older tokens when a session is refreshed or logged out. |
+| `app/Controllers/AuthController.php` | Registers users, logs them in, and returns the current user. Login returns a signed JWT that the app sends until it receives 401. |
 | `app/Controllers/DatabaseBackupController.php` | Creates a ZIP backup of the default database and sends it as a download. Records the action and removes the temporary SQL and ZIP files after sending them. |
 | `app/Controllers/EmailController.php` | Sends email through a configured mailer and lists or shows delivery records. Records whether delivery succeeded or failed. |
 | `app/Controllers/ExampleController.php` | Handles the public `GET /api/v1/example` endpoint and renders the example view with a title and message. Accepts no query or body fields and needs no authentication. |
@@ -72,7 +72,7 @@ Middleware can stop a request before its controller runs. Authentication means c
 
 | File | What it contains and does |
 |---|---|
-| `app/Middlewares/AuthMiddleware.php` | Looks up the bearer token's session, rejects missing, expired, or replaced sessions and inactive users, extends the session's sliding expiry, and adds the verified user to the request. |
+| `app/Middlewares/AuthMiddleware.php` | Verifies the bearer JWT, reloads its user, and rejects invalid or expired tokens and inactive or deleted users. Adds the verified user to the request. |
 | `app/Middlewares/ThrottleMiddleware.php` | Limits requests per signed-in user (or per client for guests) through the `throttle:<max>,<seconds>` alias. Place it after `auth`. |
 | `app/Middlewares/PermissionMiddleware.php` | Requires the signed-in user to have every permission named by the route. The `super-admin` role passes this check without individual permission grants. |
 | `app/Middlewares/RoleMiddleware.php` | Allows only the role identifiers listed by the route, such as `admin`. Available through the `role` alias, although the current routes use authentication and permission checks. |
@@ -89,11 +89,10 @@ Most models use a database table. `ServerLog.php` reads files instead.
 | `app/Models/Role.php` | Loads roles, their permissions, and their assigned-user counts. Adds, removes, or replaces permission assignments; replacing the list uses a database transaction. |
 | `app/Models/ServerLog.php` | Reads dated request log files and returns the newest entries first. Supplies the file contents and total count needed for pagination. |
 | `app/Models/User.php` | Queries users, checks passwords, loads roles and permissions, and removes password hashes from every returned row. Chooses the registration role. |
-| `app/Models/UserSession.php` | Starts, finds, extends, and ends login sessions in `user_sessions`. Stores only token hashes, keeps one session per user, and deletes expired sessions. |
 
 A user has one role, and a role has permissions such as `users.view`. The first registered user becomes `super-admin` when the users table is empty; later registrations receive the `user` role. Create that first account before allowing public access to a fresh installation.
 
-Login creates one session per user in `user_sessions`; logging in on another device replaces it. A session ends after 7 days without use or 90 days after login, and logout, a password change, or deactivation ends it immediately.
+Login returns a signed JWT that lasts 7 days (`jwt.ttl`). The server keeps no session state: the app logs out by deleting its token, and deactivating or deleting a user refuses their token immediately because every request reloads the user.
 
 ## Application views
 
@@ -129,8 +128,8 @@ These files are PHP programs run from the terminal. `cli/make` and `cli/rate-lim
 
 | File | What it contains and does |
 |---|---|
-| `migrations/2026_08_25_000001_init_project.php` | Creates `roles`, `permissions`, `role_permissions`, `users`, `user_sessions`, `activity_logs`, and `email_logs`. Inserts the standard roles and permissions and grants all permissions to the administrative roles. Its `down()` method drops these tables in the required order. |
-| `migrations/2026_10_14_173933_create_user_sessions_table.php` | Adds `user_sessions` to databases created before sessions existed. Does nothing on a fresh installation. |
+| `migrations/2026_08_25_000001_init_project.php` | Creates `roles`, `permissions`, `role_permissions`, `users`, `activity_logs`, and `email_logs`. Inserts the standard roles and permissions and grants all permissions to the administrative roles. Its `down()` method drops these tables in the required order. |
+| `migrations/2026_10_14_192456_drop_user_sessions_table.php` | Drops the `user_sessions` table left by the earlier session design. Does nothing on a fresh installation. |
 
 The migration creates no default user or password. The migration runner separately maintains a `migrations` table to remember which files have run. A rollback can remove tables and their data, so use it only when you intend to reverse those changes.
 
@@ -154,10 +153,9 @@ A JWT is a signed access token. The signature lets the server check that a token
 
 | File | What it contains and does |
 |---|---|
-| `src/Auth/SessionToken.php` | Generates random session tokens, hashes them for storage, and rejects malformed tokens before any database lookup. |
 | `src/Auth/JWT.php` | Creates signed JWTs and checks incoming tokens. Verifies the signature, timestamps, issuer, and audience. |
 | `src/Auth/JWTException.php` | Defines the error type for token creation and verification failures. It lets other code recognize a token-related failure. |
-| `src/Auth/Password.php` | Creates bcrypt password hashes, checks passwords against hashes, and detects hashes that need updating when the configured hashing cost changes. |
+| `src/Auth/Password.php` | Hashes passwords with Argon2id (bcrypt where Argon2 is unavailable), checks them, spends equal time on missing accounts, and reports older hashes that should be upgraded at login. |
 
 ## Framework database tools
 
