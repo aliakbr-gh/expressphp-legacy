@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace ExpressPHP\Http;
 
-final class IpAddress
+final class IPAddress
 {
     /**
      * Returns the canonical text form of an IPv4 or IPv6 address, or null when it is invalid.

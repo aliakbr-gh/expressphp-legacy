@@ -269,7 +269,7 @@ final class Request
      */
     public function ip(): string
     {
-        $remote = IpAddress::normalize((string)($this->server['REMOTE_ADDR'] ?? '')) ?? '0.0.0.0';
+        $remote = IPAddress::normalize((string)($this->server['REMOTE_ADDR'] ?? '')) ?? '0.0.0.0';
         if (!$this->fromTrustedProxy()) {
             return $remote;
         }
@@ -281,12 +281,12 @@ final class Request
 
         $client = $remote;
         foreach (array_reverse(explode(',', $forwarded)) as $hop) {
-            $address = IpAddress::normalize($hop);
+            $address = IPAddress::normalize($hop);
             if ($address === null) {
                 break;
             }
             $client = $address;
-            if (!IpAddress::inAny($address, $this->trustedProxies)) {
+            if (!IPAddress::inAny($address, $this->trustedProxies)) {
                 return $address;
             }
         }
@@ -402,7 +402,7 @@ final class Request
     private function fromTrustedProxy(): bool
     {
         return $this->trustedProxies !== []
-            && IpAddress::inAny((string)($this->server['REMOTE_ADDR'] ?? ''), $this->trustedProxies);
+            && IPAddress::inAny((string)($this->server['REMOTE_ADDR'] ?? ''), $this->trustedProxies);
     }
 
     private function hasBody(): bool

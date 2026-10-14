@@ -44,7 +44,7 @@ Their review entries remain open.
 
 ### FW-02 — Client-chosen IP behind a trusted proxy
 
-- `src/Http/IpAddress.php` (new): normalizes IPv4 and IPv6 (brackets, ports, IPv4-mapped IPv6) and matches CIDR
+- `src/Http/IPAddress.php` (new): normalizes IPv4 and IPv6 (brackets, ports, IPv4-mapped IPv6) and matches CIDR
   ranges.
 - `src/Http/Request.php`:
   - `ip()` walks `X-Forwarded-For` from the right and returns the first address that isn't a trusted proxy.

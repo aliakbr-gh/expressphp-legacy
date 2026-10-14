@@ -165,13 +165,13 @@ final class RateLimiter
 
     public function status(string $ip): array
     {
-        $this->validateIp($ip);
+        $this->validateIP($ip);
         return $this->read($ip);
     }
 
     public function block(string $ip): array
     {
-        $this->validateIp($ip);
+        $this->validateIP($ip);
 
         return $this->update($ip, function (array $record): array {
             $record['blocked'] = true;
@@ -185,7 +185,7 @@ final class RateLimiter
 
     public function clear(string $ip): array
     {
-        $this->validateIp($ip);
+        $this->validateIP($ip);
 
         return $this->update($ip, function (array $record): array {
             $cleared = $this->freshRecord((string)$record['ip']);
@@ -324,7 +324,7 @@ final class RateLimiter
         return $this->path . '/' . hash('sha256', $ip) . '.json';
     }
 
-    private function validateIp(string $ip): void
+    private function validateIP(string $ip): void
     {
         if (filter_var($ip, FILTER_VALIDATE_IP) === false) {
             throw new RuntimeException("Invalid IP address [{$ip}].");

@@ -170,7 +170,7 @@ The migration runner creates its tracking table when it first migrates or rolls 
 | `src/Http/Request.php` | Wraps incoming JSON, form fields, query values, headers, cookies, uploaded files, and route parameters. Provides validation helpers, trusted-proxy handling, and a place to store the authenticated user. |
 | `src/Http/Response.php` | Builds and sends responses with status codes and headers. Supports success/error JSON, text, HTML, PHP views with data, cookies, redirects, streams, and downloads. |
 | `src/Http/CORS.php` | Adds browser cross-origin response headers when the requesting origin is allowed. Uses the configured methods, headers, and credential policy. |
-| `src/Http/IpAddress.php` | Normalizes IPv4 and IPv6 addresses and matches them against IPs or CIDR ranges for trusted proxies. |
+| `src/Http/IPAddress.php` | Normalizes IPv4 and IPv6 addresses and matches them against IPs or CIDR ranges for trusted proxies. |
 | `src/Http/Pagination.php` | Wraps a result list with its total, limit, offset, returned count, and information about the next page. |
 | `src/Http/HttpException.php` | Carries an error message and HTTP status code so the application can return the appropriate response. |
 

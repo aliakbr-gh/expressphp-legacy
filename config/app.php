@@ -235,7 +235,7 @@ foreach ($secrets as $secret) {
 $config['jwt']['secret'] = trim($config['jwt']['secret']);
 
 foreach ($config['trusted_proxies'] as $proxy) {
-    if (!is_string($proxy) || !ExpressPHP\Http\IpAddress::validRange($proxy)) {
+    if (!is_string($proxy) || !ExpressPHP\Http\IPAddress::validRange($proxy)) {
         throw new RuntimeException('config/app.php: trusted_proxies must contain IP addresses or CIDR ranges.');
     }
 }
