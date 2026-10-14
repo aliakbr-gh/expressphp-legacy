@@ -27,6 +27,9 @@ final class Application
     private Router $router;
     private RateLimiter $rateLimiter;
 
+    /**
+     * Configures every framework service from the application config and creates the router.
+     */
     public function __construct(private readonly array $config = [])
     {
         $timezone = $config['timezone'] ?? 'UTC';
@@ -44,36 +47,54 @@ final class Application
         $this->router = new Router($config['middleware'] ?? [], new Config($config));
     }
 
+    /**
+     * Registers a GET route.
+     */
     public function get(string $path, callable|array $action, array $middleware = []): self
     {
         $this->router->get($path, $action, $middleware);
         return $this;
     }
 
+    /**
+     * Registers a POST route.
+     */
     public function post(string $path, callable|array $action, array $middleware = []): self
     {
         $this->router->post($path, $action, $middleware);
         return $this;
     }
 
+    /**
+     * Registers a PUT route.
+     */
     public function put(string $path, callable|array $action, array $middleware = []): self
     {
         $this->router->put($path, $action, $middleware);
         return $this;
     }
 
+    /**
+     * Registers a PATCH route.
+     */
     public function patch(string $path, callable|array $action, array $middleware = []): self
     {
         $this->router->patch($path, $action, $middleware);
         return $this;
     }
 
+    /**
+     * Registers a DELETE route.
+     */
     public function delete(string $path, callable|array $action, array $middleware = []): self
     {
         $this->router->delete($path, $action, $middleware);
         return $this;
     }
 
+    /**
+     * Registers routes under a shared path prefix and optional middleware.
+     */
     public function group(
         string         $prefix,
         callable|array $handlersOrCallback,
@@ -83,11 +104,18 @@ final class Application
         return $this;
     }
 
+    /**
+     * Returns a top-level configuration value.
+     */
     public function config(string $key, mixed $default = null): mixed
     {
         return $this->config[$key] ?? $default;
     }
 
+    /**
+     * Handles one request: HTTPS enforcement, CORS preflight, rate limiting, the body size limit, and routing.
+     * Exceptions become JSON error responses, and security and CORS headers are added to every response.
+     */
     public function dispatch(Request $request): Response
     {
         Debugger::setRequest($request);
@@ -140,6 +168,9 @@ final class Application
         return $this->finish($request, $CORS, $response);
     }
 
+    /**
+     * Captures the request, sends the response, finishes the connection, writes the request log, and exits.
+     */
     public function run(?Request $request = null): never
     {
         $request ??= Request::capture(
@@ -164,12 +195,19 @@ final class Application
         exit;
     }
 
+    /**
+     * Adds the request id, security headers and CORS headers to a response.
+     */
     private function finish(Request $request, CORS $CORS, Response $response): Response
     {
         $response->header('X-Request-ID', $request->requestId());
         return $CORS->apply($request, $this->securityHeaders($response, $request));
     }
 
+    /**
+     * Maps database constraint violations to 409 or 422 responses. Any other database error is logged and returned as
+     * a 500.
+     */
     private function databaseErrorResponse(PDOException $exception, Request $request): Response
     {
         if ((string)$exception->getCode() !== '23000') {
@@ -187,6 +225,9 @@ final class Application
         };
     }
 
+    /**
+     * Adds no-store caching, nosniff, frame denial, referrer and permissions policies, and HSTS over HTTPS.
+     */
     private function securityHeaders(Response $response, Request $request): Response
     {
         $response

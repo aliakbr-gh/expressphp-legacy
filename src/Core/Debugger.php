@@ -16,16 +16,26 @@ final class Debugger
     private static array $config = [];
     private static ?Request $request = null;
 
+    /**
+     * Stores dump settings: enabled flag, status code, maximum depth, header display, and time zone.
+     */
     public static function configure(array $config): void
     {
         self::$config = $config;
     }
 
+    /**
+     * Records the current request so a dump can show its details.
+     */
     public static function setRequest(Request $request): void
     {
         self::$request = $request;
     }
 
+    /**
+     * Stops the request and prints the given values with request and runtime details. When debugging is disabled it
+     * returns a generic 500 instead.
+     */
     public static function dump(mixed ...$values): never
     {
         $enabled = (bool)(self::$config['enabled'] ?? false);
@@ -86,6 +96,9 @@ final class Debugger
         self::emitHTML($status, $data);
     }
 
+    /**
+     * Sends a JSON payload with the given status and exits.
+     */
     private static function emit(int $status, array $payload): never
     {
         while (ob_get_level() > 0) {
@@ -112,6 +125,9 @@ final class Debugger
         exit;
     }
 
+    /**
+     * Renders the debug dump page and exits.
+     */
     private static function emitHTML(int $status, array $data): never
     {
         while (ob_get_level() > 0) {
@@ -160,6 +176,9 @@ final class Debugger
         exit;
     }
 
+    /**
+     * Renders a normalized value as escaped, collapsible HTML, up to the maximum depth.
+     */
     private static function renderValue(mixed $value, int $depth = 0): string
     {
         if ($depth >= (int)(self::$config['max_depth'] ?? 6)) {
@@ -195,11 +214,17 @@ final class Debugger
         return '<span>' . self::escape((string)$value) . '</span>';
     }
 
+    /**
+     * Escapes text for HTML.
+     */
     private static function escape(string $value): string
     {
         return htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     }
 
+    /**
+     * Returns the stack frame that called the debugger.
+     */
     private static function caller(): array
     {
         foreach (debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS) as $frame) {
@@ -212,6 +237,9 @@ final class Debugger
         return [];
     }
 
+    /**
+     * Returns the request input with sensitive keys redacted.
+     */
     private static function requestInput(Request $request): mixed
     {
         try {
@@ -221,6 +249,9 @@ final class Debugger
         }
     }
 
+    /**
+     * Returns the call stack without the debugger's own frames.
+     */
     private static function stack(): array
     {
         $stack = [];
@@ -239,6 +270,9 @@ final class Debugger
         return $stack;
     }
 
+    /**
+     * Converts a value to plain arrays and scalars for display, redacting sensitive keys and limiting depth.
+     */
     private static function normalize(mixed $value, int $depth = 0): mixed
     {
         $maxDepth = (int)(self::$config['max_depth'] ?? 6);
@@ -276,16 +310,25 @@ final class Debugger
         return $value;
     }
 
+    /**
+     * Normalizes a value with sensitive keys redacted.
+     */
     private static function redact(mixed $value): mixed
     {
         return self::normalize($value);
     }
 
+    /**
+     * Reports whether a key holds a secret, using the shared Redactor rules.
+     */
     private static function sensitive(string $key): bool
     {
         return Redactor::sensitive($key);
     }
 
+    /**
+     * Formats a byte count as B, KB, MB or GB.
+     */
     private static function bytes(int $bytes): string
     {
         $units = ['B', 'KB', 'MB', 'GB'];

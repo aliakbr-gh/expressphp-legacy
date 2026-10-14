@@ -9,6 +9,9 @@ final class Route
     private readonly string $pattern;
     private readonly array $parameterNames;
 
+    /**
+     * Stores the route and compiles its path pattern. Each {name} placeholder matches one path segment.
+     */
     public function __construct(
         public readonly string $method,
         public readonly string $path,

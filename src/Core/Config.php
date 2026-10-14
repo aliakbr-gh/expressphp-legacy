@@ -6,6 +6,9 @@ namespace ExpressPHP\Core;
 
 final class Config
 {
+    /**
+     * Wraps the validated configuration array.
+     */
     public function __construct(private readonly array $values)
     {
     }
@@ -25,6 +28,9 @@ final class Config
         return $value;
     }
 
+    /**
+     * Returns the whole configuration array.
+     */
     public function all(): array
     {
         return $this->values;

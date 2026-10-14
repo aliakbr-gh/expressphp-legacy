@@ -12,11 +12,18 @@ final class JWT
     private const MAX_HEADER_BYTES = 512;
     private static array $config = [];
 
+    /**
+     * Stores the signing secret, key id, previous keys, issuer, audience, lifetime, and leeway.
+     */
     public static function configure(array $config): void
     {
         self::$config = $config;
     }
 
+    /**
+     * Signs the claims as an HS256 token, adding the issuer, audience, issue time, expiry, a random id, and the key
+     * id.
+     */
     public static function encode(array $claims, ?int $ttl = null): string
     {
         $secret = self::secret();
@@ -77,11 +84,18 @@ final class JWT
         return $payload;
     }
 
+    /**
+     * Returns the token lifetime in seconds.
+     */
     public static function ttl(): int
     {
         return (int)(self::$config['ttl'] ?? 3600);
     }
 
+    /**
+     * Checks that the required claims exist with the right types, the time window (with leeway), the issuer, and the
+     * audience.
+     */
     private static function validateClaims(array $payload): void
     {
         $now = time();
@@ -127,6 +141,9 @@ final class JWT
         }
     }
 
+    /**
+     * Decodes one Base64URL segment as a JSON object.
+     */
     private static function decodeJSON(string $encoded, string $part): array
     {
         try {
@@ -140,11 +157,17 @@ final class JWT
         return $decoded;
     }
 
+    /**
+     * Encodes bytes as unpadded Base64URL.
+     */
     private static function base64URLEncode(string $value): string
     {
         return rtrim(strtr(base64_encode($value), '+/', '-_'), '=');
     }
 
+    /**
+     * Strictly decodes unpadded Base64URL, rejecting any other characters.
+     */
     private static function base64URLDecode(string $value): string
     {
         if ($value === '' || preg_match('/^[A-Za-z0-9_-]+$/', $value) !== 1) {
@@ -161,11 +184,17 @@ final class JWT
         return $decoded;
     }
 
+    /**
+     * Returns the current signing secret.
+     */
     private static function secret(): string
     {
         return self::checkedSecret((string)(self::$config['secret'] ?? ''));
     }
 
+    /**
+     * Returns the key id written into new tokens.
+     */
     private static function keyId(): string
     {
         return (string)(self::$config['kid'] ?? 'primary');
@@ -188,6 +217,9 @@ final class JWT
         return self::checkedSecret((string)$previous[$keyId]);
     }
 
+    /**
+     * Rejects secrets shorter than 32 bytes.
+     */
     private static function checkedSecret(#[\SensitiveParameter] string $secret): string
     {
         if (strlen($secret) < 32) {
@@ -196,11 +228,17 @@ final class JWT
         return $secret;
     }
 
+    /**
+     * Returns the expected issuer.
+     */
     private static function issuer(): string
     {
         return (string)(self::$config['issuer'] ?? 'expressphp');
     }
 
+    /**
+     * Returns the expected audience.
+     */
     private static function audience(): string
     {
         return (string)(self::$config['audience'] ?? 'expressphp-api');

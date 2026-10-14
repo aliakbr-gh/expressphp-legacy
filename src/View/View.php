@@ -11,11 +11,17 @@ use Throwable;
 
 final class View
 {
+    /**
+     * Creates a renderer for templates under $path.
+     */
     public function __construct(
         private readonly string $path = __DIR__ . '/../../app/Views',
     ) {
     }
 
+    /**
+     * Renders a template by relative name, keeping the resolved path inside the views directory.
+     */
     public function render(string $name, array $data = []): string
     {
         $name = str_ends_with($name, '.php') ? substr($name, 0, -4) : $name;
@@ -38,6 +44,9 @@ final class View
         return self::renderTemplate($file, $data);
     }
 
+    /**
+     * Rejects data keys that are not valid variable names or would replace reserved template variables.
+     */
     private function validateData(array $data): void
     {
         $reserved = [
@@ -53,6 +62,9 @@ final class View
         }
     }
 
+    /**
+     * Includes the template with its data and returns the captured output, restoring output buffers on failure.
+     */
     private static function renderTemplate(string $__viewFile, array $__viewData): string
     {
         $data = $__viewData;

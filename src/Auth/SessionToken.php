@@ -10,11 +10,17 @@ namespace ExpressPHP\Auth;
  */
 final class SessionToken
 {
+    /**
+     * Returns a new random token: 32 bytes written as 64 hexadecimal characters.
+     */
     public static function generate(): string
     {
         return bin2hex(random_bytes(32));
     }
 
+    /**
+     * Returns the SHA-256 hash that is stored in place of the token.
+     */
     public static function hash(#[\SensitiveParameter] string $token): string
     {
         return hash('sha256', $token);

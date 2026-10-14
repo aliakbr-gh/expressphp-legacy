@@ -13,6 +13,9 @@ final class ErrorLogger
 {
     private static array $config = [];
 
+    /**
+     * Stores log settings: path, retention, and time zone.
+     */
     public static function configure(array $config): void
     {
         self::$config = $config;
@@ -61,6 +64,9 @@ final class ErrorLogger
         }
     }
 
+    /**
+     * Returns an exception's class, message, code, file, and line.
+     */
     private static function describe(Throwable $exception): array
     {
         return [

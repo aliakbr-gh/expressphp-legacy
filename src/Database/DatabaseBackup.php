@@ -15,6 +15,9 @@ final class DatabaseBackup
 {
     private const ROWS_PER_INSERT = 100;
 
+    /**
+     * Configures a backup of one MySQL database into a private directory. $timezone is used in the file name.
+     */
     public function __construct(
         private readonly PDO $connection,
         private readonly string $database,
@@ -80,6 +83,9 @@ final class DatabaseBackup
         ];
     }
 
+    /**
+     * Writes every base table's structure and rows to an SQL file from one consistent, read-only snapshot.
+     */
     private function writeSQL(string $sqlPath, string $sqlName, string $stamp): void
     {
         $handle = @fopen($sqlPath, 'xb');
@@ -186,6 +192,9 @@ final class DatabaseBackup
         return $columns;
     }
 
+    /**
+     * Returns the PDO attribute that turns MySQL result buffering on or off.
+     */
     private function bufferedQueryAttribute(): int
     {
         // PHP 8.4 adds Pdo\Mysql constants; the PDO::MYSQL_* aliases are deprecated from PHP 8.5.
@@ -194,6 +203,9 @@ final class DatabaseBackup
             : constant('PDO::MYSQL_ATTR_USE_BUFFERED_QUERY');
     }
 
+    /**
+     * Converts one column value to an SQL literal for the dump.
+     */
     private function SQLValue(mixed $value): string
     {
         if ($value === null) {
@@ -215,6 +227,8 @@ final class DatabaseBackup
     }
 
     /**
+     * Returns the names of the base tables in the database, excluding views.
+     *
      * @return list<string>
      */
     private function tables(): array
@@ -232,6 +246,9 @@ final class DatabaseBackup
         return $tables;
     }
 
+    /**
+     * Quotes a table or column name after checking it against a strict identifier pattern.
+     */
     private function quoteName(string $name): string
     {
         if (preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $name) !== 1) {
@@ -241,6 +258,9 @@ final class DatabaseBackup
         return '`' . $name . '`';
     }
 
+    /**
+     * Writes a string to the dump file, retrying short writes and failing on errors.
+     */
     private function write($handle, string $sql): void
     {
         $length = strlen($sql);
@@ -254,6 +274,9 @@ final class DatabaseBackup
         }
     }
 
+    /**
+     * Creates the private backup directory when it is missing.
+     */
     private function ensureDirectory(): void
     {
         if (!is_dir($this->path) && !@mkdir($this->path, 0750, true) && !is_dir($this->path)) {
@@ -261,6 +284,9 @@ final class DatabaseBackup
         }
     }
 
+    /**
+     * Deletes a temporary backup file if it exists.
+     */
     private function delete(string $path): void
     {
         if (is_file($path)) {

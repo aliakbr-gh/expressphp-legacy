@@ -22,12 +22,18 @@ final class MakeCommand
         'unset', 'use', 'var', 'void', 'while', 'xor', 'yield',
     ];
 
+    /**
+     * Creates the generator for the project root. $timezone stamps migration file names.
+     */
     public function __construct(
         private readonly string $root,
         private readonly string $timezone = 'UTC',
     ) {
     }
 
+    /**
+     * Runs `php cli/make <type> <name>` and returns the process exit code.
+     */
     public function run(array $arguments): int
     {
         $type = strtolower((string)($arguments[0] ?? 'help'));
@@ -53,6 +59,9 @@ final class MakeCommand
         return 0;
     }
 
+    /**
+     * Creates an empty, timestamped migration file.
+     */
     private function migration(string $name): string
     {
         $description = $this->snake($name);
@@ -81,6 +90,9 @@ PHP;
         return $this->write($path, $template);
     }
 
+    /**
+     * Creates a controller class with an index action.
+     */
     private function controller(string $name): string
     {
         $class = $this->className($name, 'Controller');
@@ -107,6 +119,9 @@ PHP;
         return $this->write($path, $template);
     }
 
+    /**
+     * Creates a model class whose table is the snake_case plural of its name.
+     */
     private function model(string $name): string
     {
         $class = $this->className($name);
@@ -131,6 +146,9 @@ PHP;
         return $this->write($path, $template);
     }
 
+    /**
+     * Creates a middleware class that lets every request continue.
+     */
     private function middleware(string $name): string
     {
         $class = $this->className($name, 'Middleware');
@@ -158,6 +176,9 @@ PHP;
         return $this->write($path, $template);
     }
 
+    /**
+     * Writes a new file, refusing to overwrite an existing one.
+     */
     private function write(string $path, string $contents): string
     {
         if (is_file($path)) {
@@ -173,6 +194,9 @@ PHP;
         return $path;
     }
 
+    /**
+     * Converts a name to a StudlyCase class name with the given suffix, rejecting invalid and reserved names.
+     */
     private function className(string $name, string $suffix = ''): string
     {
         $name = preg_replace('/' . preg_quote($suffix, '/') . '$/i', '', trim($name)) ?? $name;
@@ -187,6 +211,9 @@ PHP;
         return $class . $suffix;
     }
 
+    /**
+     * Converts a name to snake_case.
+     */
     private function snake(string $name): string
     {
         $name = preg_replace('/([a-z0-9])([A-Z])/', '$1_$2', trim($name)) ?? $name;
@@ -197,11 +224,17 @@ PHP;
         return $name;
     }
 
+    /**
+     * Returns a path relative to the project root, for display.
+     */
     private function relative(string $path): string
     {
         return ltrim(str_replace($this->root, '', $path), '/');
     }
 
+    /**
+     * Prints the generator's usage.
+     */
     private function help(): void
     {
         echo "ExpressPHP generator\n\n";

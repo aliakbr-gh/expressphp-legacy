@@ -5,6 +5,9 @@ declare(strict_types=1);
 use ExpressPHP\Database\Migrations\Migration;
 
 return new class extends Migration {
+    /**
+     * Creates the application tables and inserts the default roles, permissions and grants.
+     */
     public function up(PDO $database): void
     {
         $database->exec(
@@ -110,6 +113,9 @@ return new class extends Migration {
         $this->grantAdministrativePermissions($database);
     }
 
+    /**
+     * Drops the application tables in foreign-key order.
+     */
     public function down(PDO $database): void
     {
         $database->exec('DROP TABLE IF EXISTS email_logs');
@@ -121,6 +127,9 @@ return new class extends Migration {
         $database->exec('DROP TABLE IF EXISTS roles');
     }
 
+    /**
+     * Inserts the super-admin, admin and user roles, or updates their names.
+     */
     private function seedRoles(PDO $database): void
     {
         $statement = $database->prepare(
@@ -137,6 +146,9 @@ return new class extends Migration {
         }
     }
 
+    /**
+     * Inserts the permissions used by the routes, or updates their names.
+     */
     private function seedPermissions(PDO $database): void
     {
         $statement = $database->prepare(
@@ -174,6 +186,9 @@ return new class extends Migration {
         }
     }
 
+    /**
+     * Grants every permission to the super-admin and admin roles, skipping existing grants.
+     */
     private function grantAdministrativePermissions(PDO $database): void
     {
         $database->exec(

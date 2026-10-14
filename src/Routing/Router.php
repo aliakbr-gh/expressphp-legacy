@@ -19,37 +19,58 @@ final class Router
     private array $prefixStack = [];
     private array $middlewareStack = [];
 
+    /**
+     * Creates a router with middleware aliases. Config is passed to constructors that ask for it.
+     */
     public function __construct(
         private readonly array   $middlewareAliases = [],
         private readonly ?Config $config = null,
     ) {
     }
 
+    /**
+     * Registers a GET route.
+     */
     public function get(string $path, callable|array $action, array $middleware = []): self
     {
         return $this->add('GET', $path, $action, $middleware);
     }
 
+    /**
+     * Registers a POST route.
+     */
     public function post(string $path, callable|array $action, array $middleware = []): self
     {
         return $this->add('POST', $path, $action, $middleware);
     }
 
+    /**
+     * Registers a PUT route.
+     */
     public function put(string $path, callable|array $action, array $middleware = []): self
     {
         return $this->add('PUT', $path, $action, $middleware);
     }
 
+    /**
+     * Registers a PATCH route.
+     */
     public function patch(string $path, callable|array $action, array $middleware = []): self
     {
         return $this->add('PATCH', $path, $action, $middleware);
     }
 
+    /**
+     * Registers a DELETE route.
+     */
     public function delete(string $path, callable|array $action, array $middleware = []): self
     {
         return $this->add('DELETE', $path, $action, $middleware);
     }
 
+    /**
+     * Registers routes under a shared path prefix and optional middleware.
+     */
     public function group(
         string         $prefix,
         callable|array $middlewareOrCallback,
@@ -79,6 +100,9 @@ final class Router
         return $this;
     }
 
+    /**
+     * Registers a route, rejecting invalid actions, empty middleware parameters, and duplicates.
+     */
     public function add(string $method, string $path, callable|array $action, array $middleware = []): self
     {
         if (!$this->validAction($action)) {
@@ -99,6 +123,9 @@ final class Router
         return $this;
     }
 
+    /**
+     * Finds the route for the request and runs its middleware and action, or returns 405 or 404.
+     */
     public function dispatch(Request $request, Response $response): Response
     {
         // HEAD runs the GET route; the application omits the body when emitting.
@@ -144,6 +171,9 @@ final class Router
         return $response->error('Route not found', 404);
     }
 
+    /**
+     * Rejects middleware that is not an alias or callable, or that has an empty alias or parameter.
+     */
     private function assertMiddleware(array $middleware): void
     {
         foreach ($middleware as $item) {
@@ -165,12 +195,18 @@ final class Router
         }
     }
 
+    /**
+     * Reports whether an action is a callable or a [Controller::class, method] pair.
+     */
     private function validAction(mixed $action): bool
     {
         return is_callable($action)
             || (is_array($action) && count($action) === 2 && is_string($action[0]) && is_string($action[1]));
     }
 
+    /**
+     * Creates the controller and returns the callable action.
+     */
     private function resolveAction(mixed $action): callable
     {
         if (is_array($action) && is_string($action[0])) {
@@ -191,6 +227,9 @@ final class Router
         return $action;
     }
 
+    /**
+     * Resolves an alias such as "permission:a,b" to a callable and its parameters.
+     */
     private function resolveMiddleware(mixed $definition): array
     {
         $parameters = [];
@@ -231,12 +270,18 @@ final class Router
         return new $class(...$arguments);
     }
 
+    /**
+     * Normalizes a path to a leading slash and no trailing slash.
+     */
     private function normalizePath(string $path): string
     {
         $normalized = '/' . trim($path, '/');
         return $normalized === '/' ? '/' : rtrim($normalized, '/');
     }
 
+    /**
+     * Joins group prefixes and a route path into one normalized path.
+     */
     private function joinPaths(string ...$paths): string
     {
         $segments = [];

@@ -16,6 +16,9 @@ final class Migrator
 
     private PDO $database;
 
+    /**
+     * Opens the connection used for migrations. The tracking table is created only when migrating or rolling back.
+     */
     public function __construct(
         private readonly string $path,
         ?string                 $connection = null,
@@ -50,6 +53,9 @@ final class Migrator
         });
     }
 
+    /**
+     * Reverses the latest batch, newest migration first, under the migration lock, and returns the reversed names.
+     */
     public function rollback(): array
     {
         return $this->locked(function (): array {
@@ -90,6 +96,9 @@ final class Migrator
         return $statement->fetchAll(PDO::FETCH_COLUMN);
     }
 
+    /**
+     * Lists every migration file as "Ran" or "Pending" without writing to the database.
+     */
     public function status(): array
     {
         $ran = $this->ran();
@@ -122,6 +131,9 @@ final class Migrator
         }
     }
 
+    /**
+     * Requires a migration file and checks that it returns a Migration instance.
+     */
     private function load(string $name, string $file): Migration
     {
         $migration = require $file;
@@ -131,6 +143,9 @@ final class Migrator
         return $migration;
     }
 
+    /**
+     * Creates the migrations tracking table if it does not exist.
+     */
     private function createRepository(): void
     {
         $this->database->exec(
@@ -143,6 +158,9 @@ final class Migrator
         );
     }
 
+    /**
+     * Reports whether the migrations tracking table exists.
+     */
     private function repositoryExists(): bool
     {
         try {
@@ -153,6 +171,9 @@ final class Migrator
         }
     }
 
+    /**
+     * Returns migration files keyed by name, sorted so they run in filename (timestamp) order.
+     */
     private function files(): array
     {
         $files = glob(rtrim($this->path, '/') . '/*.php') ?: [];
@@ -164,6 +185,9 @@ final class Migrator
         return $mapped;
     }
 
+    /**
+     * Returns the names of applied migrations as a lookup set.
+     */
     private function ran(): array
     {
         if (!$this->repositoryExists()) {
@@ -173,6 +197,9 @@ final class Migrator
         return array_fill_keys($names, true);
     }
 
+    /**
+     * Returns the batch number for the next migrate run.
+     */
     private function nextBatch(): int
     {
         return (int)$this->database->query('SELECT COALESCE(MAX(batch), 0) + 1 FROM migrations')->fetchColumn();

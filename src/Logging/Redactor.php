@@ -24,6 +24,9 @@ final class Redactor
     // Short names are matched exactly to avoid redacting keys such as "shipping".
     private const SENSITIVE_KEYS = ['otp', 'pin', 'cvv', 'cvc', 'ssn'];
 
+    /**
+     * Reports whether a key name marks a secret.
+     */
     public static function sensitive(string $key): bool
     {
         $normalized = strtolower(str_replace(['-', '_', ' '], '', $key));
@@ -38,6 +41,9 @@ final class Redactor
         return false;
     }
 
+    /**
+     * Replaces secret values in nested arrays and truncates long strings.
+     */
     public static function redact(mixed $value, int $maxStringBytes = 1000): mixed
     {
         if (is_string($value)) {

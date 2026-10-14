@@ -6,6 +6,9 @@ namespace ExpressPHP\Http;
 
 final class Pagination
 {
+    /**
+     * Wraps a page of items with the total, count, limit, offset, and next-page details.
+     */
     public static function payload(array $items, int $total, int $limit, int $offset): array
     {
         $count = count($items);

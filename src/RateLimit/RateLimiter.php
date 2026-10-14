@@ -33,6 +33,9 @@ final class RateLimiter
     private readonly array $except;
     private readonly array $failClosed;
 
+    /**
+     * Reads the limiter settings. Limiting is off unless "enabled" is true.
+     */
     public function __construct(array $config = [])
     {
         $this->enabled = (bool)($config['enabled'] ?? false);
@@ -45,6 +48,9 @@ final class RateLimiter
         $this->failClosed = is_array($config['fail_closed'] ?? null) ? $config['fail_closed'] : [];
     }
 
+    /**
+     * Reports whether limiting is enabled.
+     */
     public function enabled(): bool
     {
         return $this->enabled;
@@ -141,6 +147,9 @@ final class RateLimiter
         );
     }
 
+    /**
+     * Deletes the counter for a key, for example after a successful login.
+     */
     public function clearKey(string $key): void
     {
         $file = $this->counterFile($key);
@@ -149,6 +158,9 @@ final class RateLimiter
         }
     }
 
+    /**
+     * Returns an IP address's client key, block state, and current request count.
+     */
     public function status(string $ip): array
     {
         $ip = $this->validIP($ip);
@@ -193,6 +205,8 @@ final class RateLimiter
     }
 
     /**
+     * Returns the manually blocked IP addresses, most recently blocked first.
+     *
      * @return list<array{ip: string, blocked_at: int}>
      */
     public function blocked(): array
@@ -248,6 +262,9 @@ final class RateLimiter
         }
     }
 
+    /**
+     * Returns the record's count and reset time, starting a new window when the old one has ended.
+     */
     private function currentWindow(array $record, int $now, int $windowSeconds): array
     {
         $resetAt = (int)($record['reset_at'] ?? 0);
@@ -257,6 +274,9 @@ final class RateLimiter
         return ['count' => max(0, (int)($record['count'] ?? 0)), 'reset_at' => $resetAt];
     }
 
+    /**
+     * Reports whether a path matches any of the glob patterns.
+     */
     private function matches(string $path, array $patterns): bool
     {
         foreach ($patterns as $pattern) {
@@ -303,6 +323,9 @@ final class RateLimiter
         }
     }
 
+    /**
+     * Writes a record atomically through a temporary file and a rename.
+     */
     private function write(string $file, array $record): void
     {
         $this->ensureDirectories();
@@ -319,6 +342,9 @@ final class RateLimiter
         }
     }
 
+    /**
+     * Reads and decodes a record under a shared lock. Returns [] when it is missing or unreadable.
+     */
     private function readFile(string $file): array
     {
         $handle = @fopen($file, 'rb');
@@ -336,6 +362,9 @@ final class RateLimiter
         }
     }
 
+    /**
+     * Decodes a JSON record, treating invalid content as empty.
+     */
     private function decode(string $contents): array
     {
         if ($contents === '') {
@@ -380,16 +409,25 @@ final class RateLimiter
         }
     }
 
+    /**
+     * Returns the counter file for a key. The file name is the key's SHA-256 hash.
+     */
     private function counterFile(string $key): string
     {
         return $this->path . '/counters/' . hash('sha256', $key) . '.json';
     }
 
+    /**
+     * Returns the block file for an IP address.
+     */
     private function blockFile(string $ip): string
     {
         return $this->path . '/blocked/' . hash('sha256', IPAddress::normalize($ip) ?? $ip) . '.json';
     }
 
+    /**
+     * Normalizes an IP address, or throws when it is invalid.
+     */
     private function validIP(string $ip): string
     {
         $normalized = IPAddress::normalize($ip);

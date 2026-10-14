@@ -17,6 +17,10 @@ final class Validator
     // Error messages returned for one request; more are summarized so a large body cannot amplify the response.
     private const MAX_ERRORS = 50;
 
+    /**
+     * Validates input against rules and returns the normalized values. Throws ValidationException with errors keyed
+     * by field.
+     */
     public static function validate(
         array $input,
         array $rules,
@@ -107,6 +111,9 @@ final class Validator
         return $validated;
     }
 
+    /**
+     * Reports whether a parent path of the field has already failed.
+     */
     private static function hasFailedAncestor(array $failed, string $field): bool
     {
         $position = strrpos($field, '.');
@@ -120,6 +127,9 @@ final class Validator
         return false;
     }
 
+    /**
+     * Applies one rule to a value and returns [valid, normalized value].
+     */
     private static function check(
         string $rule,
         mixed $value,
@@ -162,6 +172,9 @@ final class Validator
         };
     }
 
+    /**
+     * Accepts integers and integer strings within PHP's range, returning an int.
+     */
     private static function integer(mixed $value): array
     {
         if (is_int($value)) {
@@ -180,6 +193,9 @@ final class Validator
         return [true, (int)$value];
     }
 
+    /**
+     * Accepts finite numbers and numeric strings, returning an int or float.
+     */
     private static function numeric(mixed $value): array
     {
         if (is_int($value)) {
@@ -200,6 +216,9 @@ final class Validator
         return [is_finite($normalized), $normalized];
     }
 
+    /**
+     * Accepts boolean values and their usual string forms, returning a bool.
+     */
     private static function boolean(mixed $value): array
     {
         if (!is_scalar($value) || (is_string($value) && trim($value) === '')) {
@@ -209,6 +228,9 @@ final class Validator
         return [$normalized !== null, $normalized ?? $value];
     }
 
+    /**
+     * Returns the measure used by min, max and between: the number itself, string length in bytes, or array count.
+     */
     private static function size(mixed $value): int|float
     {
         return match (true) {
@@ -219,11 +241,17 @@ final class Validator
         };
     }
 
+    /**
+     * Reports whether a value is a UUID string.
+     */
     private static function validUUID(mixed $value): bool
     {
         return is_string($value) && preg_match('/\A(?:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)\z/i', $value) === 1;
     }
 
+    /**
+     * Parses a real calendar date, rejecting relative expressions such as "tomorrow".
+     */
     private static function dateValue(mixed $value): ?DateTimeImmutable
     {
         if (!is_string($value) || trim($value) === '' || str_contains($value, "\0")) {
@@ -242,6 +270,9 @@ final class Validator
         }
     }
 
+    /**
+     * Reports whether a value matches a date format exactly.
+     */
     private static function validDateFormat(mixed $value, string $format): bool
     {
         if (!is_string($value) || str_contains($value, "\0")) {
@@ -257,6 +288,9 @@ final class Validator
             && $date->format($format) === $value;
     }
 
+    /**
+     * Compares a date with another field or a fixed date, for the before and after rules.
+     */
     private static function compareDates(string $rule, mixed $value, array $input, string $reference): bool
     {
         [$exists, $other] = self::get($input, $reference);
@@ -273,6 +307,9 @@ final class Validator
         };
     }
 
+    /**
+     * Returns the first presence rule that makes the field required, or null.
+     */
     private static function requiredRule(array $input, array $definitions, array $rules, string $pattern, string $field): ?array
     {
         foreach ($rules as [$rule, $parameters]) {
@@ -319,6 +356,9 @@ final class Validator
         return [true, $value];
     }
 
+    /**
+     * Returns the rules declared for a field path, matching * wildcards.
+     */
     private static function definitionFor(array $definitions, string $path): array
     {
         $segments = explode('.', $path);
@@ -337,6 +377,9 @@ final class Validator
         return [];
     }
 
+    /**
+     * Reports whether a value matches any of the required_if or required_unless values.
+     */
     private static function matchesCondition(mixed $value, array $expected): bool
     {
         foreach ($expected as $candidate) {
@@ -359,11 +402,17 @@ final class Validator
         return false;
     }
 
+    /**
+     * Reports whether a rule controls presence rather than the value.
+     */
     private static function isPresenceRule(string $rule): bool
     {
         return in_array($rule, ['required', 'optional', 'sometimes', 'required_if', 'required_unless', 'required_with', 'required_without'], true);
     }
 
+    /**
+     * Reports whether a field's rules include the named rule.
+     */
     private static function hasRule(array $rules, string $name): bool
     {
         foreach ($rules as [$rule]) {
@@ -374,6 +423,9 @@ final class Validator
         return false;
     }
 
+    /**
+     * Replaces * in referenced field names with the current item's indexes.
+     */
     private static function resolveReferences(string $rule, array $parameters, string $pattern, string $field): array
     {
         $indexes = [];
@@ -402,6 +454,9 @@ final class Validator
         return $parameters;
     }
 
+    /**
+     * Parses rule strings and arrays into [rule, parameters] pairs, rejecting invalid definitions.
+     */
     private static function definitions(array $rules): array
     {
         $definitions = [];
@@ -430,6 +485,9 @@ final class Validator
         return $definitions;
     }
 
+    /**
+     * Splits a rule string on |, keeping any pipes inside regex patterns.
+     */
     private static function splitRules(string $rules): array
     {
         $definitions = [];
@@ -454,6 +512,9 @@ final class Validator
         return $definitions;
     }
 
+    /**
+     * Returns the position just after a regex pattern's closing delimiter.
+     */
     private static function regexEnd(string $rules, int $start): int
     {
         $delimiter = $rules[$start] ?? '';
@@ -488,6 +549,9 @@ final class Validator
         throw new RuntimeException('The regex validation rule has an unclosed pattern delimiter.');
     }
 
+    /**
+     * Checks a rule's name, parameter count and parameters when the rules are defined.
+     */
     private static function assertRule(string $rule, array $parameters, string $field): void
     {
         [$minimum, $maximum] = match ($rule) {
@@ -539,6 +603,9 @@ final class Validator
         }
     }
 
+    /**
+     * Rejects empty segments, null bytes and partial wildcards in a field path.
+     */
     private static function assertFieldPath(string $field): void
     {
         if ($field === '' || str_contains($field, "\0")) {
@@ -551,6 +618,9 @@ final class Validator
         }
     }
 
+    /**
+     * Expands a field pattern to every concrete path present in the input, enforcing the item limit.
+     */
     private static function expandField(mixed $input, array $segments, string $prefix, array &$paths): void
     {
         if ($segments === []) {
@@ -577,6 +647,9 @@ final class Validator
         self::expandField($value, $segments, $prefix === '' ? $segment : $prefix . '.' . $segment, $paths);
     }
 
+    /**
+     * Records the message for a failed rule, using custom messages and placeholders.
+     */
     private static function addError(array &$errors, array $custom, string $field, string $pattern, string $rule, array $parameters): void
     {
         $template = $custom[$field . '.' . $rule] ?? $custom[$pattern . '.' . $rule]
@@ -597,6 +670,9 @@ final class Validator
         $errors[$field][] = $message;
     }
 
+    /**
+     * Returns the default message template for a rule.
+     */
     private static function defaultMessage(string $rule): string
     {
         return match ($rule) {
@@ -639,12 +715,18 @@ final class Validator
         return $value === null || $value === '' || (is_array($value) && $value === []);
     }
 
+    /**
+     * Returns the raw input value at a path.
+     */
     private static function comparison(array $input, string $field): mixed
     {
         [, $value] = self::get($input, $field);
         return $value;
     }
 
+    /**
+     * Returns [exists, value] for a dotted path.
+     */
     private static function get(array $input, string $path): array
     {
         $value = $input;
@@ -657,6 +739,9 @@ final class Validator
         return [true, $value];
     }
 
+    /**
+     * Writes a value at a dotted path, creating parent arrays.
+     */
     private static function set(array &$output, string $path, mixed $value): void
     {
         $target = &$output;
@@ -741,17 +826,26 @@ final class Validator
         }
     }
 
+    /**
+     * Reports whether a value can be compared in a database rule.
+     */
     private static function databaseValueAllowed(mixed $value): bool
     {
         return is_string($value) || is_int($value) || is_bool($value) || (is_float($value) && is_finite($value));
     }
 
+    /**
+     * Runs a unique or exists check once per value within one validation.
+     */
     private static function cachedDatabaseValueExists(array &$cache, mixed $value, array $parameters, bool $unique = false): bool
     {
         $key = serialize([$unique, $parameters, $value]);
         return $cache[$key] ??= self::databaseValueExists($value, $parameters, $unique);
     }
 
+    /**
+     * Runs a unique or exists query with bound values and validated identifiers.
+     */
     private static function databaseValueExists(mixed $value, array $parameters, bool $unique = false): bool
     {
         [$table, $column] = $parameters;
@@ -769,6 +863,9 @@ final class Validator
         return $statement->fetchColumn() !== false;
     }
 
+    /**
+     * Reports whether a table or column name is a plain identifier.
+     */
     private static function safeIdentifier(string $identifier): bool
     {
         return preg_match('/\A[A-Za-z_][A-Za-z0-9_]*\z/', $identifier) === 1;

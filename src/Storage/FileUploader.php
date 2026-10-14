@@ -25,11 +25,17 @@ final class FileUploader
 
     private static array $config = [];
 
+    /**
+     * Stores the global upload policy: path, size limit, allowed extensions, MIME map, and file modes.
+     */
     public static function configure(array $config): void
     {
         self::$config = $config;
     }
 
+    /**
+     * Validates one uploaded file and moves it, under a random name, into the private upload directory.
+     */
     public function upload(array $file, string $directory = '', array $options = []): array
     {
         $this->validateUpload($file);
@@ -71,6 +77,9 @@ final class FileUploader
         ];
     }
 
+    /**
+     * Uploads several files. If one fails, the files already stored are removed.
+     */
     public function uploadMany(array $files, string $directory = '', array $options = []): array
     {
         $uploaded = [];
@@ -88,6 +97,9 @@ final class FileUploader
         return $uploaded;
     }
 
+    /**
+     * Deletes a stored upload by relative path, but only when it resolves inside the upload directory.
+     */
     public function delete(string $relativePath): bool
     {
         $root = $this->root(self::$config);
@@ -98,6 +110,9 @@ final class FileUploader
         return unlink($candidate);
     }
 
+    /**
+     * Rejects PHP upload errors and files that did not arrive through an HTTP upload.
+     */
     private function validateUpload(array $file): void
     {
         $error = (int)($file['error'] ?? UPLOAD_ERR_NO_FILE);
@@ -110,6 +125,9 @@ final class FileUploader
         }
     }
 
+    /**
+     * Returns the client's file name reduced to a safe basename, for display only.
+     */
     private function originalName(array $file): string
     {
         $name = basename(str_replace('\\', '/', (string)($file['name'] ?? 'file')));
@@ -117,12 +135,18 @@ final class FileUploader
         return trim($name, '. ') === '' ? 'file' : $name;
     }
 
+    /**
+     * Detects the MIME type from the file contents.
+     */
     private function MIMEType(string $path): string
     {
         $MIMEType = (new finfo(FILEINFO_MIME_TYPE))->file($path);
         return is_string($MIMEType) && $MIMEType !== '' ? strtolower($MIMEType) : 'application/octet-stream';
     }
 
+    /**
+     * Rejects empty files and files over the size limit.
+     */
     private function validateSize(int $size, int $maximum): void
     {
         if ($size < 1) {
@@ -133,6 +157,9 @@ final class FileUploader
         }
     }
 
+    /**
+     * Requires an extension that is on the allowlist and is not executable or markup.
+     */
     private function validateExtension(string $extension, mixed $allowed): void
     {
         if (!is_array($allowed) || $allowed === []) {
@@ -147,6 +174,9 @@ final class FileUploader
         $this->validateAllowed($extension, $allowed, 'extension');
     }
 
+    /**
+     * Rejects a value that is not in an allowlist (case-insensitive).
+     */
     private function validateAllowed(string $value, array $allowed, string $label): void
     {
         $allowed = array_map(static fn(mixed $item): string => strtolower(trim((string)$item)), $allowed);
@@ -155,6 +185,10 @@ final class FileUploader
         }
     }
 
+    /**
+     * Checks the detected MIME type against the extension's map or the allowed MIME list, and fails when neither is
+     * configured.
+     */
     private function validateMIMEType(string $extension, string $MIMEType, array $config): void
     {
         $mapping = $config['mime_types_by_extension'] ?? [];
@@ -174,6 +208,9 @@ final class FileUploader
         $this->validateAllowed($MIMEType, $allowed, 'MIME type');
     }
 
+    /**
+     * Checks that a docx or xlsx file reported as a plain ZIP has the Office Open XML structure.
+     */
     private function validateOfficeArchive(string $extension, string $MIMEType, string $path): void
     {
         $entry = self::OFFICE_ENTRIES[$extension] ?? null;
@@ -195,6 +232,9 @@ final class FileUploader
         }
     }
 
+    /**
+     * Returns the real path of the upload directory, creating it if needed.
+     */
     private function root(array $config): string
     {
         $path = rtrim((string)($config['path'] ?? dirname(__DIR__, 2) . '/storage/uploads'), '/');
@@ -209,6 +249,9 @@ final class FileUploader
         return $realPath;
     }
 
+    /**
+     * Validates a subdirectory as plain path segments with no traversal.
+     */
     private function subdirectory(string $directory): string
     {
         $directory = trim(str_replace('\\', '/', $directory), '/');
@@ -224,6 +267,9 @@ final class FileUploader
         return $directory;
     }
 
+    /**
+     * Creates a directory with the configured mode and checks that it is writable.
+     */
     private function createDirectory(string $directory, array $config = []): void
     {
         $mode = (int)($config['directory_mode'] ?? 0750);
@@ -235,6 +281,9 @@ final class FileUploader
         }
     }
 
+    /**
+     * Converts PHP's multi-file $_FILES layout into a list of single files.
+     */
     private function normalize(array $files): array
     {
         if (!is_array($files['name'] ?? null)) {
@@ -253,6 +302,9 @@ final class FileUploader
         return $normalized;
     }
 
+    /**
+     * Returns a readable message for a PHP upload error code.
+     */
     private function uploadError(int $error): string
     {
         return match ($error) {

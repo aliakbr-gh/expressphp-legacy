@@ -11,6 +11,9 @@ final class Password
 {
     private static int $bcryptCost = 12;
 
+    /**
+     * Sets the bcrypt cost, which must be between 4 and 31.
+     */
     public static function configure(array $config): void
     {
         $cost = (int)($config['bcrypt_cost'] ?? 12);
@@ -35,11 +38,17 @@ final class Password
         ]);
     }
 
+    /**
+     * Checks a password against a stored hash. A password containing a NUL character never matches.
+     */
     public static function verify(#[\SensitiveParameter] string $password, #[\SensitiveParameter] string $hash): bool
     {
         return !str_contains($password, "\0") && password_verify($password, $hash);
     }
 
+    /**
+     * Reports whether a stored hash used a different cost and should be replaced.
+     */
     public static function needsRehash(#[\SensitiveParameter] string $hash): bool
     {
         return password_needs_rehash($hash, PASSWORD_BCRYPT, [

@@ -41,22 +41,34 @@ final class Response
     private string $body = '';
     private ?Closure $streamCallback = null;
 
+    /**
+     * Creates a response. The View renders templates for view().
+     */
     public function __construct(private readonly View $views = new View())
     {
     }
 
+    /**
+     * Sets the HTTP status code.
+     */
     public function status(int $code): self
     {
         $this->statusCode = $code;
         return $this;
     }
 
+    /**
+     * Sets a header, replacing any earlier value.
+     */
     public function header(string $name, string $value): self
     {
         $this->headers[$name] = $value;
         return $this;
     }
 
+    /**
+     * Appends a value to a comma-separated header such as Vary.
+     */
     public function appendHeader(string $name, string $value): self
     {
         $current = $this->headers[$name] ?? null;
@@ -64,11 +76,17 @@ final class Response
         return $this;
     }
 
+    /**
+     * Sets a JSON body. Invalid UTF-8 is replaced instead of failing.
+     */
     public function json(mixed $data, int $flags = 0): self
     {
         return $this->setBody(json_encode($data, self::JSON_FLAGS | $flags), 'application/json; charset=utf-8');
     }
 
+    /**
+     * Sends {"success": true, "message", "data"} with the given status.
+     */
     public function success(
         mixed  $data = null,
         string $message = 'Request successful',
@@ -102,11 +120,17 @@ final class Response
         ]);
     }
 
+    /**
+     * Sets a plain-text body.
+     */
     public function text(string $text): self
     {
         return $this->setBody($text, 'text/plain; charset=utf-8');
     }
 
+    /**
+     * Sets an HTML body.
+     */
     public function html(string $html): self
     {
         return $this->setBody($html, 'text/html; charset=utf-8');
@@ -120,11 +144,17 @@ final class Response
         return $this->html($this->views->render($name, $data))->header('Content-Security-Policy', self::VIEW_CSP);
     }
 
+    /**
+     * Sets a raw body with an optional content type.
+     */
     public function send(string $body, ?string $contentType = null): self
     {
         return $this->setBody($body, $contentType);
     }
 
+    /**
+     * Adds a Set-Cookie header after validating the path, domain and SameSite value. SameSite=None forces Secure.
+     */
     public function cookie(string $name, string $value, array $options = []): self
     {
         $parts = [rawurlencode($name) . '=' . rawurlencode($value)];
@@ -171,11 +201,17 @@ final class Response
         return $this;
     }
 
+    /**
+     * Expires a cookie in the browser.
+     */
     public function clearCookie(string $name, array $options = []): self
     {
         return $this->cookie($name, '', [...$options, 'expires' => 1, 'max_age' => 0]);
     }
 
+    /**
+     * Redirects to a URL. Callers must make sure the URL is trusted.
+     */
     public function redirect(string $url, int $status = 302): self
     {
         return $this->status($status)->header('Location', $url)->html(
@@ -235,6 +271,9 @@ final class Response
         return $this;
     }
 
+    /**
+     * Sends a file as a download, named after the file unless a name is given.
+     */
     public function download(string $path, ?string $filename = null): self
     {
         return $this->sendFile($path, $filename ?? basename($path));
@@ -250,6 +289,9 @@ final class Response
         return $this;
     }
 
+    /**
+     * Sends 204 with no body.
+     */
     public function noContent(): self
     {
         $this->statusCode = 204;
@@ -258,17 +300,25 @@ final class Response
         return $this;
     }
 
+    /**
+     * Returns the status code.
+     */
     public function statusCode(): int
     {
         return $this->statusCode;
     }
 
+    /**
+     * Returns the headers other than Set-Cookie.
+     */
     public function headers(): array
     {
         return $this->headers;
     }
 
     /**
+     * Returns the Set-Cookie values.
+     *
      * @return list<string> Each value is emitted as its own Set-Cookie header.
      */
     public function cookies(): array
@@ -276,16 +326,25 @@ final class Response
         return $this->cookies;
     }
 
+    /**
+     * Returns the buffered body, or '' for a streamed response.
+     */
     public function body(): string
     {
         return $this->body;
     }
 
+    /**
+     * Reports whether the body is streamed.
+     */
     public function isStream(): bool
     {
         return $this->streamCallback !== null;
     }
 
+    /**
+     * Sends the status, headers, cookies, and body or stream. HEAD requests omit the body.
+     */
     public function emit(bool $includeBody = true): void
     {
         http_response_code($this->statusCode);

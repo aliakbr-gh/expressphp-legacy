@@ -17,11 +17,17 @@ final class RequestLogger
 
     private static array $config = [];
 
+    /**
+     * Stores log settings: enabled flag, path, input size limit, retention, and time zone.
+     */
     public static function configure(array $config): void
     {
         self::$config = $config;
     }
 
+    /**
+     * Appends one redacted JSON line describing the request and response. Never throws.
+     */
     public static function write(Request $request, Response $response): void
     {
         if (!(bool)(self::$config['enabled'] ?? true)) {
@@ -76,6 +82,9 @@ final class RequestLogger
         }
     }
 
+    /**
+     * Returns the log directory.
+     */
     public static function directory(): string
     {
         return rtrim(
@@ -84,6 +93,9 @@ final class RequestLogger
         );
     }
 
+    /**
+     * Returns today's date in the configured time zone, which names the log file.
+     */
     public static function currentDate(): string
     {
         $timezone = new DateTimeZone((string)(self::$config['timezone'] ?? 'UTC'));
@@ -115,6 +127,9 @@ final class RequestLogger
         return ['items' => $items, 'total' => LogFiles::countLines($file)];
     }
 
+    /**
+     * Returns the request input for the log, redacted, or a placeholder when it is too large or unreadable.
+     */
     private static function input(Request $request): mixed
     {
         $limit = max(0, (int)(self::$config['max_input_bytes'] ?? 4096));

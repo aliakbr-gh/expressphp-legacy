@@ -14,16 +14,26 @@ final class SMTPMailer
 
     private static array $config = [];
 
+    /**
+     * Stores mail settings: enabled flag, default mailer, sender, timeout, EHLO domain, and mailer profiles.
+     */
     public static function configure(array $config): void
     {
         self::$config = $config;
     }
 
+    /**
+     * Returns the name of the default mailer profile.
+     */
     public static function defaultMailer(): string
     {
         return (string)(self::$config['default'] ?? 'smtp');
     }
 
+    /**
+     * Sends one message through the named mailer, using STARTTLS or SSL, and AUTH LOGIN when a username is
+     * configured.
+     */
     public function send(
         string  $mailer,
         string  $recipient,
@@ -81,6 +91,10 @@ final class SMTPMailer
         }
     }
 
+    /**
+     * Validates and returns the named mailer's settings, refusing incomplete profiles and authentication without
+     * encryption.
+     */
     private function configuration(string $mailer): array
     {
         if (!(bool)(self::$config['enabled'] ?? false)) {
@@ -126,6 +140,9 @@ final class SMTPMailer
         return $config;
     }
 
+    /**
+     * Opens the SMTP connection with certificate verification and TLS 1.2 or newer.
+     */
     private function connect(array $config): mixed
     {
         $scheme = $config['encryption'] === 'ssl' ? 'ssl' : 'tcp';
@@ -150,6 +167,9 @@ final class SMTPMailer
         return $socket;
     }
 
+    /**
+     * Sends one SMTP command and checks the reply code.
+     */
     private function command(mixed $socket, #[\SensitiveParameter] string $command, array $expected): string
     {
         $this->write($socket, $command . "\r\n");
@@ -175,6 +195,9 @@ final class SMTPMailer
         }
     }
 
+    /**
+     * Reads an SMTP reply, which may span several lines, and checks its code.
+     */
     private function expect(mixed $socket, array $expected): string
     {
         $response = '';
@@ -196,6 +219,9 @@ final class SMTPMailer
         return $response;
     }
 
+    /**
+     * Builds the message headers and the Base64-encoded body.
+     */
     private function message(
         array   $config,
         string  $recipient,
@@ -220,6 +246,9 @@ final class SMTPMailer
         return implode("\r\n", $headers) . "\r\n\r\n" . chunk_split(base64_encode($body), 76, "\r\n");
     }
 
+    /**
+     * Formats an address with an encoded display name.
+     */
     private function mailbox(string $address, string $name): string
     {
         return $name === '' ? '<' . $address . '>' : $this->encodeHeader($name) . ' <' . $address . '>';
@@ -251,6 +280,9 @@ final class SMTPMailer
         return implode("\r\n ", $words);
     }
 
+    /**
+     * Rejects invalid addresses and addresses containing line breaks.
+     */
     private function assertEmail(string $email, string $label): void
     {
         if (filter_var($email, FILTER_VALIDATE_EMAIL) === false || str_contains($email, "\n")) {

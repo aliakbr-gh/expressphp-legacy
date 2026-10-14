@@ -22,6 +22,9 @@ final class Request
     // request id set during routing stay visible to the code that created the request.
     private readonly stdClass $context;
 
+    /**
+     * Creates a request from its parts. Request::capture() builds one from the PHP globals.
+     */
     public function __construct(
         private readonly string $method,
         private readonly string $uri,
@@ -40,6 +43,9 @@ final class Request
         $this->context->requestId = null;
     }
 
+    /**
+     * Builds the request from the PHP globals, reading at most $maxBodyBytes of a non-multipart body.
+     */
     public static function capture(array $trustedProxies = [], int $maxBodyBytes = 0): self
     {
         $scriptName = str_replace('\\', '/', (string)($_SERVER['SCRIPT_NAME'] ?? ''));
@@ -76,11 +82,17 @@ final class Request
         );
     }
 
+    /**
+     * Returns the HTTP method in uppercase.
+     */
     public function method(): string
     {
         return $this->method;
     }
 
+    /**
+     * Returns the URL path without the base path, query string, or trailing slash.
+     */
     public function path(): string
     {
         $path = parse_url($this->uri, PHP_URL_PATH) ?: '/';
@@ -93,6 +105,9 @@ final class Request
         return $path === '/' ? '/' : rtrim($path, '/');
     }
 
+    /**
+     * Reports whether the body exceeded the configured limit.
+     */
     public function bodyTooLarge(): bool
     {
         return $this->bodyTooLarge;
@@ -116,11 +131,17 @@ final class Request
         return $supplied !== null && preg_match('/\A[A-Za-z0-9-]{8,64}\z/', $supplied) === 1 ? $supplied : null;
     }
 
+    /**
+     * Returns the raw body.
+     */
     public function text(): string
     {
         return $this->rawBody;
     }
 
+    /**
+     * Returns the decoded JSON body, or one key of it. Malformed JSON raises a 400.
+     */
     public function json(?string $key = null, mixed $default = null): mixed
     {
         if (!$this->jsonDecoded) {
@@ -142,6 +163,9 @@ final class Request
         return is_array($this->decodedJSON) ? ($this->decodedJSON[$key] ?? $default) : $default;
     }
 
+    /**
+     * Returns the JSON or form body, or one key of it.
+     */
     public function input(?string $key = null, mixed $default = null): mixed
     {
         $data = $this->isJSON() ? $this->json() : $this->formData();
@@ -183,21 +207,33 @@ final class Request
         );
     }
 
+    /**
+     * Validates the route parameters together with the query string.
+     */
     public function validateParams(array $rules, array $messages = []): array
     {
         return Validator::validate(array_replace_recursive($this->query, $this->params), $rules, $messages);
     }
 
+    /**
+     * Returns the query string values, or one of them.
+     */
     public function query(?string $key = null, mixed $default = null): mixed
     {
         return $key === null ? $this->query : ($this->query[$key] ?? $default);
     }
 
+    /**
+     * Returns the route parameters, or one of them.
+     */
     public function param(?string $key = null, mixed $default = null): mixed
     {
         return $key === null ? $this->params : ($this->params[$key] ?? $default);
     }
 
+    /**
+     * Returns a copy with route parameters. The authenticated user and request id stay shared with the original.
+     */
     public function withParams(array $params): self
     {
         $clone = clone $this;
@@ -205,6 +241,9 @@ final class Request
         return $clone;
     }
 
+    /**
+     * Returns a request header by name, including an Authorization header forwarded through Apache rewrites.
+     */
     public function header(string $name, ?string $default = null): ?string
     {
         $key = 'HTTP_' . strtoupper(str_replace('-', '_', $name));
@@ -224,6 +263,9 @@ final class Request
         return isset($this->server[$key]) ? (string)$this->server[$key] : $default;
     }
 
+    /**
+     * Returns all request headers, keyed by their usual names.
+     */
     public function headers(): array
     {
         $headers = [];
@@ -241,28 +283,43 @@ final class Request
         return $headers;
     }
 
+    /**
+     * Reports whether the body is declared as JSON.
+     */
     public function isJSON(): bool
     {
         return str_contains(strtolower($this->header('Content-Type', '') ?? ''), 'application/json');
     }
 
+    /**
+     * Returns the uploaded files array.
+     */
     public function files(): array
     {
         return $this->files;
     }
 
+    /**
+     * Returns one uploaded file entry.
+     */
     public function file(string $key): ?array
     {
         $file = $this->files[$key] ?? null;
         return is_array($file) ? $file : null;
     }
 
+    /**
+     * Reports whether a file was uploaded without error.
+     */
     public function hasFile(string $key): bool
     {
         $file = $this->file($key);
         return $file !== null && ($file['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_OK;
     }
 
+    /**
+     * Returns a cookie value.
+     */
     public function cookie(string $key, mixed $default = null): mixed
     {
         return $this->cookies[$key] ?? $default;
@@ -298,6 +355,9 @@ final class Request
         return $client;
     }
 
+    /**
+     * Returns the token from an "Authorization: Bearer" header.
+     */
     public function bearerToken(): ?string
     {
         $authorization = $this->header('Authorization');
@@ -306,6 +366,9 @@ final class Request
             : null;
     }
 
+    /**
+     * Returns the HTTP Basic username and password, if they were sent.
+     */
     public function basicCredentials(): ?array
     {
         if (isset($this->server['PHP_AUTH_USER'], $this->server['PHP_AUTH_PW'])) {
@@ -329,22 +392,34 @@ final class Request
         return ['username' => $username, 'password' => $password];
     }
 
+    /**
+     * Stores the authenticated user for the rest of the request.
+     */
     public function setUser(array $user): self
     {
         $this->context->user = $user;
         return $this;
     }
 
+    /**
+     * Returns the authenticated user, or null.
+     */
     public function user(): ?array
     {
         return $this->context->user;
     }
 
+    /**
+     * Returns the User-Agent header.
+     */
     public function userAgent(): ?string
     {
         return $this->header('User-Agent');
     }
 
+    /**
+     * Returns http or https, trusting X-Forwarded-Proto only from trusted proxies.
+     */
     public function protocol(): string
     {
         if ($this->fromTrustedProxy()) {
@@ -361,31 +436,49 @@ final class Request
         return (!empty($this->server['HTTPS']) && $this->server['HTTPS'] !== 'off') ? 'https' : 'http';
     }
 
+    /**
+     * Reports whether the request arrived over HTTPS.
+     */
     public function secure(): bool
     {
         return $this->protocol() === 'https';
     }
 
+    /**
+     * Returns the Host header. It is supplied by the client, so do not use it for security decisions.
+     */
     public function host(): string
     {
         return $this->header('Host', (string)($this->server['SERVER_NAME'] ?? 'localhost')) ?? 'localhost';
     }
 
+    /**
+     * Returns the host without its port.
+     */
     public function hostname(): string
     {
         return explode(':', $this->host())[0];
     }
 
+    /**
+     * Returns the full request URL.
+     */
     public function url(): string
     {
         return $this->protocol() . '://' . $this->host() . $this->uri;
     }
 
+    /**
+     * Returns the request URI, including its query string.
+     */
     public function originalURL(): string
     {
         return $this->uri;
     }
 
+    /**
+     * Returns the first of the given types that the Accept header allows, or false.
+     */
     public function accepts(string ...$types): string|false
     {
         $accept = strtolower($this->header('Accept', '*/*') ?? '*/*');
@@ -404,17 +497,26 @@ final class Request
         return false;
     }
 
+    /**
+     * Reports whether the direct peer is a trusted proxy.
+     */
     private function fromTrustedProxy(): bool
     {
         return $this->trustedProxies !== []
             && IPAddress::inAny((string)($this->server['REMOTE_ADDR'] ?? ''), $this->trustedProxies);
     }
 
+    /**
+     * Reports whether the request carries a non-empty body.
+     */
     private function hasBody(): bool
     {
         return $this->form !== [] || !in_array(trim($this->rawBody), ['', '{}', '[]'], true);
     }
 
+    /**
+     * Converts decoded JSON objects to arrays, recording which paths were objects.
+     */
     private function JSONToArray(mixed $value, string $path): mixed
     {
         if ($value instanceof stdClass) {
@@ -432,6 +534,9 @@ final class Request
         return $value;
     }
 
+    /**
+     * Returns form fields from $_POST, or from a parsed URL-encoded body.
+     */
     private function formData(): array
     {
         if ($this->form !== []) {

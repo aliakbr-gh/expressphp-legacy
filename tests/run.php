@@ -48,11 +48,17 @@ register_shutdown_function(static function () use ($workspace): void {
 
 $tests = [];
 
+/**
+ * Registers a named test.
+ */
 function test(string $name, callable $body): void
 {
     $GLOBALS['tests'][$name] = $body;
 }
 
+/**
+ * Fails the current test when the condition is false.
+ */
 function expect(bool $condition, string $detail = ''): void
 {
     if (!$condition) {
@@ -60,6 +66,9 @@ function expect(bool $condition, string $detail = ''): void
     }
 }
 
+/**
+ * Runs the body and returns the exception, failing unless it is an instance of $class.
+ */
 function expectThrows(string $class, callable $body): Throwable
 {
     try {
@@ -71,6 +80,9 @@ function expectThrows(string $class, callable $body): Throwable
     throw new RuntimeException('expected ' . $class . ' to be thrown');
 }
 
+/**
+ * Calls a private or protected method, for white-box tests.
+ */
 function invokePrivate(object|string $target, string $method, mixed ...$arguments): mixed
 {
     return (new ReflectionMethod($target, $method))->invoke(is_object($target) ? $target : null, ...$arguments);
@@ -78,10 +90,16 @@ function invokePrivate(object|string $target, string $method, mixed ...$argument
 
 final class ConfigProbeController
 {
+    /**
+     * Receives Config from the router, which the test checks.
+     */
     public function __construct(private readonly Config $config)
     {
     }
 
+    /**
+     * Returns the configured JWT key id.
+     */
     public function show(Request $request, Response $response): Response
     {
         return $response->success($this->config->get('jwt.kid'));

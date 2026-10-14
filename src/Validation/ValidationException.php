@@ -26,6 +26,8 @@ final class ValidationException extends RuntimeException
     }
 
     /**
+     * Returns the errors keyed by field name; request-level errors use the _request key.
+     *
      * @return array<string, list<string>>
      */
     public function errors(): array
@@ -33,6 +35,9 @@ final class ValidationException extends RuntimeException
         return $this->errors;
     }
 
+    /**
+     * Converts errors to field => list of messages. A plain list of messages becomes request-level errors.
+     */
     private static function normalize(array $errors): array
     {
         if (array_is_list($errors)) {

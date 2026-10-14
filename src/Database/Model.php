@@ -19,6 +19,9 @@ abstract class Model
     // UTC TIMESTAMP/DATETIME columns returned as ISO 8601, for example 2026-10-13T08:15:00Z.
     protected array $dates = ['created_at', 'updated_at'];
 
+    /**
+     * Returns every row, or the first $limit rows, with hidden columns removed and dates formatted.
+     */
     public function all(?int $limit = null): array
     {
         $sql = 'SELECT * FROM ' . $this->identifier($this->table);
@@ -29,6 +32,9 @@ abstract class Model
         return $this->presentAll($this->run($sql . ' LIMIT :limit', ['limit' => max(1, $limit)])->fetchAll());
     }
 
+    /**
+     * Returns one page of rows, newest primary key first.
+     */
     public function paginate(int $limit, int $offset = 0): array
     {
         $sql = sprintf(
@@ -39,6 +45,9 @@ abstract class Model
         return $this->presentAll($this->run($sql, ['limit' => max(1, $limit), 'offset' => max(0, $offset)])->fetchAll());
     }
 
+    /**
+     * Counts all rows in the table.
+     */
     public function count(): int
     {
         return (int)$this->pdo()
@@ -46,11 +55,17 @@ abstract class Model
             ->fetchColumn();
     }
 
+    /**
+     * Finds one row by primary key.
+     */
     public function find(int|string $id): ?array
     {
         return $this->firstWhere($this->primaryKey, $id);
     }
 
+    /**
+     * Returns the rows whose column equals the value, optionally limited.
+     */
     public function where(string $column, mixed $value, ?int $limit = null): array
     {
         $sql = sprintf(
@@ -66,12 +81,18 @@ abstract class Model
         return $this->presentAll($this->run($sql, $bindings)->fetchAll());
     }
 
+    /**
+     * Returns the first row whose column equals the value, or null.
+     */
     public function firstWhere(string $column, mixed $value): ?array
     {
         $row = $this->rawFirstWhere($column, $value);
         return $row === null ? null : $this->present($row);
     }
 
+    /**
+     * Inserts the fillable attributes and returns the stored row.
+     */
     public function create(#[\SensitiveParameter] array $attributes): array
     {
         $attributes = $this->fillable($attributes);
@@ -90,6 +111,9 @@ abstract class Model
         return $this->find((string)$this->pdo()->lastInsertId()) ?? $this->present($attributes);
     }
 
+    /**
+     * Updates the fillable attributes of one row by primary key. Returns false when no fillable attribute was given.
+     */
     public function update(int|string $id, #[\SensitiveParameter] array $attributes): bool
     {
         $attributes = $this->fillable($attributes);
@@ -111,6 +135,9 @@ abstract class Model
         return true;
     }
 
+    /**
+     * Deletes one row by primary key.
+     */
     public function delete(int|string $id): bool
     {
         $sql = sprintf(
@@ -122,6 +149,9 @@ abstract class Model
         return true;
     }
 
+    /**
+     * Returns the connection this model uses.
+     */
     protected function pdo(): PDO
     {
         return Database::connection($this->connection);
@@ -161,6 +191,9 @@ abstract class Model
         return $statement;
     }
 
+    /**
+     * Removes hidden columns from a row and formats its date columns as ISO 8601 UTC.
+     */
     protected function present(array $row): array
     {
         foreach ($this->hidden as $column) {
@@ -175,11 +208,17 @@ abstract class Model
         return $row;
     }
 
+    /**
+     * Applies present() to every row.
+     */
     protected function presentAll(array $rows): array
     {
         return array_map($this->present(...), $rows);
     }
 
+    /**
+     * Quotes a table or column name after checking it against a strict identifier pattern.
+     */
     protected function identifier(string $identifier): string
     {
         if (preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $identifier) !== 1) {
@@ -188,6 +227,9 @@ abstract class Model
         return '`' . $identifier . '`';
     }
 
+    /**
+     * Keeps only the attributes listed in $fillable.
+     */
     private function fillable(array $attributes): array
     {
         return array_intersect_key($attributes, array_flip($this->fillable));

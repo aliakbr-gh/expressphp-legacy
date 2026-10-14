@@ -6,10 +6,16 @@ namespace ExpressPHP\Http;
 
 final class CORS
 {
+    /**
+     * Stores the CORS policy: enabled flag, origins, methods, headers, exposed headers, credentials, and max age.
+     */
     public function __construct(private readonly array $config = [])
     {
     }
 
+    /**
+     * Adds CORS headers when the request's Origin is allowed. Otherwise the response is left unchanged.
+     */
     public function apply(Request $request, Response $response): Response
     {
         if (!(bool)($this->config['enabled'] ?? true)) {
@@ -44,6 +50,9 @@ final class CORS
         return $response;
     }
 
+    /**
+     * Compares the origin with the allowlist in constant time.
+     */
     private function originAllowed(string $origin): bool
     {
         foreach ($this->config['origins'] ?? ['*'] as $allowed) {

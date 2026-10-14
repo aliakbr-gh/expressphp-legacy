@@ -54,11 +54,17 @@ final class IPAddress
         return inet_ntop($masked) . '/' . $prefix;
     }
 
+    /**
+     * Reports whether a string is a valid IP address or CIDR range.
+     */
     public static function validRange(string $range): bool
     {
         return self::parseRange($range) !== null;
     }
 
+    /**
+     * Reports whether an address falls inside an IP address or CIDR range.
+     */
     public static function inRange(string $address, string $range): bool
     {
         $parsed = self::parseRange($range);
@@ -86,6 +92,9 @@ final class IPAddress
         return (ord($packed[$bytes]) & $mask) === (ord($network[$bytes]) & $mask);
     }
 
+    /**
+     * Reports whether an address falls inside any of the ranges.
+     */
     public static function inAny(string $address, array $ranges): bool
     {
         foreach ($ranges as $range) {
@@ -97,6 +106,8 @@ final class IPAddress
     }
 
     /**
+     * Parses an IP address or CIDR range into its packed network bytes and prefix length.
+     *
      * @return array{0: string, 1: int}|null
      */
     private static function parseRange(string $range): ?array

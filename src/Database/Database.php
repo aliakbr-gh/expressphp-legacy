@@ -13,12 +13,19 @@ final class Database
     private static array $config = [];
     private static array $connections = [];
 
+    /**
+     * Stores the connection settings and forgets any open connections.
+     */
     public static function configure(array $config): void
     {
         self::$config = $config;
         self::$connections = [];
     }
 
+    /**
+     * Returns the named PDO connection, opening it on first use with exceptions, associative fetches, native
+     * prepares, a connect timeout and, for MySQL, a UTC session.
+     */
     public static function connection(?string $name = null): PDO
     {
         $name ??= (string)(self::$config['default'] ?? 'mysql');
@@ -112,6 +119,9 @@ final class Database
         }
     }
 
+    /**
+     * Closes one named connection, or all of them when no name is given.
+     */
     public static function disconnect(?string $name = null): void
     {
         if ($name === null) {

@@ -8,6 +8,9 @@ use ExpressPHP\Http\Response;
 
 final class RateLimitDecision
 {
+    /**
+     * Describes one limiter result: allowed, blocked, the limit, remaining requests, reset time, and retry delay.
+     */
     public function __construct(
         public readonly bool $allowed,
         public readonly bool $blocked,
@@ -32,6 +35,9 @@ final class RateLimitDecision
             ->header('Retry-After', (string)$this->retryAfter));
     }
 
+    /**
+     * Adds the X-RateLimit-Limit, X-RateLimit-Remaining and X-RateLimit-Reset headers.
+     */
     public function withHeaders(Response $response): Response
     {
         return $response

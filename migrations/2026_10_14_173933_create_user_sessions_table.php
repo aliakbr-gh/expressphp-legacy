@@ -8,6 +8,9 @@ use ExpressPHP\Database\Migrations\Migration;
 // user_sessions from the consolidated migration, so this one does nothing there. The old
 // users.session_version column is left in place on existing databases; it is no longer read or written.
 return new class extends Migration {
+    /**
+     * Creates the user_sessions table if it does not exist.
+     */
     public function up(PDO $database): void
     {
         $database->exec(
@@ -29,6 +32,9 @@ return new class extends Migration {
         );
     }
 
+    /**
+     * Drops the user_sessions table.
+     */
     public function down(PDO $database): void
     {
         // Sessions are temporary sign-in state; dropping them only signs everyone out.

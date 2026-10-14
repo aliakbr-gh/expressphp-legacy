@@ -44,7 +44,7 @@ $paths = [
     '/storage/rate-limiter/',
     '/tests/run.php',
     '/README.md',
-    '/CLAUDE_QA_REVIEW_2.md',
+    '/AGENTS.md',
 ];
 
 $exposed = 0;
